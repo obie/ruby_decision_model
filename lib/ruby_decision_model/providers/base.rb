@@ -84,10 +84,40 @@ module RubyDecisionModel
         raw = parsed.is_a?(Hash) && parsed["usage"].is_a?(Hash) ? parsed["usage"] : {}
 
         Response::Usage.new(
-          input_tokens: Integer(raw["input_tokens"], exception: false),
-          output_tokens: Integer(raw["output_tokens"], exception: false),
-          cost: reports_cost? ? Float(raw["cost"], exception: false) : nil
+          input_tokens: token_count(raw, "input_tokens"),
+          output_tokens: token_count(raw, "output_tokens"),
+          cost: reports_cost? ? cost(raw) : nil
         )
+      end
+
+      # A token count is a whole number of tokens. Integer(..., exception:
+      # false) accepted a good deal more than that: 30.9 became 30, "120"
+      # became 120, and anything it could not read at all -- [], true, an
+      # error object where usage should be -- became nil, indistinguishable
+      # from a provider that simply does not report the field. Requests are
+      # billed per input token, so a usage number that quietly became nil or
+      # lost its fraction is worse than no number.
+      #
+      # An absent field is still nil. A present one has to be a count.
+      def token_count(raw, name)
+        return nil unless raw.key?(name)
+
+        value = raw[name]
+        return nil if value.nil?
+        return value if value.is_a?(Integer)
+        return Integer(value) if value.is_a?(Float) && value.finite? && (value % 1).zero?
+
+        raise InvalidResponse, "usage.#{name} is not a token count: #{value.inspect}"
+      end
+
+      def cost(raw)
+        return nil unless raw.key?("cost")
+
+        value = raw["cost"]
+        return nil if value.nil?
+        return value.to_f if value.is_a?(Numeric) && value.finite?
+
+        raise InvalidResponse, "usage.cost is not a number: #{value.inspect}"
       end
 
       # Keeps the API key out of logs and error output.

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Usage fields are validated rather than coerced. `Integer(value, exception:
+  false)` turned `30.9` into `30`, `"120"` into `120`, and anything it could
+  not read — `[]`, `true`, an error object where usage should be — into `nil`,
+  which was indistinguishable from a provider that does not report the field.
+  A present field that is not a whole token count now raises `InvalidResponse`;
+  an absent one is still `nil`. Same for `cost`.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
