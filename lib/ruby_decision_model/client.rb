@@ -17,7 +17,7 @@ module RubyDecisionModel
     RETRYABLE_STATUSES = RetryPolicy::DEFAULT_STATUSES
     RETRYABLE_EXCEPTIONS = (RetryPolicy::TIMEOUT_EXCEPTIONS + RetryPolicy::CONNECTION_EXCEPTIONS).freeze
 
-    attr_reader :provider, :model, :retry_policy, :timeout
+    attr_reader :provider, :model, :retry_policy, :timeout, :max_response_bytes
 
     # provider:  :open_router, :typesafe, or a Providers::Base instance. When
     #            nil, api_key: alone selects OpenRouter; otherwise the
@@ -31,8 +31,16 @@ module RubyDecisionModel
     # retry:     a RetryPolicy or a Hash of overrides.
     # random:    callable returning a Float in 0...1, used for backoff jitter.
     # clock:     callable returning monotonic seconds, used for total_timeout.
+    # The client reads a response into memory before it can parse it, so it
+    # needs a ceiling. 10 MiB is far more than any decision response: the
+    # whole request is capped at 64k tokens, and the answers are smaller than
+    # the questions. It exists to bound a hostile or broken endpoint, not to
+    # be tuned.
+    DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+
     def initialize(provider: nil, api_key: nil, model: nil, base_url: nil, timeout: 5,
                    transport: nil, sleeper: ->(seconds) { sleep(seconds) }, retry: {},
+                   max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
                    random: -> { rand }, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
       @provider = resolve_provider(provider, api_key: api_key, base_url: base_url)
       unless @provider.api_key?
@@ -42,6 +50,7 @@ module RubyDecisionModel
 
       @model = @provider.resolve_model(model)
       @timeout = timeout
+      @max_response_bytes = validate_max_response_bytes(max_response_bytes)
       @transport = transport || default_transport
       @sleeper = sleeper
       @retry_policy = RetryPolicy.from(binding.local_variable_get(:retry))
@@ -100,9 +109,60 @@ module RubyDecisionModel
         headers.each { |k, v| request[k] = v }
         request.body = body
 
-        response = http.request(request)
-        [response.code.to_i, response.body, response.each_header.to_h]
+        read_capped(http, request)
       end
+    end
+
+    # Net::HTTP buffers a whole response before handing it over, so a huge
+    # body -- from a hostile endpoint, a proxy error page, or an upstream
+    # having a bad day -- is in memory before anything gets to reject it.
+    # Read it in chunks instead and stop at the ceiling. Content-Length, when
+    # the server sends an honest one, ends it before a single chunk arrives.
+    def read_capped(http, request)
+      limit = @max_response_bytes
+      result = nil
+
+      http.request(request) do |response|
+        headers = response.each_header.to_h
+        status = response.code.to_i
+        declared = Integer(response["content-length"].to_s, exception: false)
+        raise_too_large(declared, limit) if limit && declared && declared > limit
+
+        body = +""
+        response.read_body do |chunk|
+          body << chunk
+          raise_too_large(body.bytesize, limit) if limit && body.bytesize > limit
+        end
+
+        result = [status, body, headers]
+      end
+
+      result
+    end
+
+    def raise_too_large(bytes, limit)
+      raise ResponseTooLarge.new(
+        "response body exceeds max_response_bytes (#{bytes} > #{limit} bytes)",
+        bytes: bytes, limit: limit
+      )
+    end
+
+    def validate_max_response_bytes(limit)
+      return limit if limit.nil?
+      return limit if limit.is_a?(Integer) && limit.positive?
+
+      raise ConfigurationError,
+            "max_response_bytes must be nil or a positive Integer, got #{limit.inspect}"
+    end
+
+    # A custom transport does its own reading, so the ceiling is checked again
+    # on whatever it returns. The bytes are already in memory by then, but
+    # they never reach the JSON parser or an error object that outlives them.
+    def enforce_response_limit!(response_body)
+      return if @max_response_bytes.nil? || response_body.nil?
+
+      size = response_body.to_s.bytesize
+      raise_too_large(size, @max_response_bytes) if size > @max_response_bytes
     end
 
     def perform_with_retry(url:, headers:, body:)
@@ -115,6 +175,7 @@ module RubyDecisionModel
           status, response_body, response_headers = normalize_transport_result(
             @transport.call(url: url, headers: headers, body: body)
           )
+          enforce_response_limit!(response_body)
         rescue Error
           raise
         rescue StandardError => e
