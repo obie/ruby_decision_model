@@ -78,6 +78,7 @@ RubyDecisionModel::Client.new(
   base_url: nil,              # overrides the provider base URL
   timeout: 5,                 # open and read timeout in seconds
   retry: { max_retries: 2 },  # RetryPolicy or a Hash of overrides
+  headers: {},                # merged over the provider's headers
   transport: nil              # see Transport
 )
 
@@ -86,6 +87,27 @@ client.model      # => "jev-latest" (resolved after aliasing)
 ```
 
 Both providers send `User-Agent: ruby_decision_model/<version>`.
+
+### Per-request options
+
+`model:` and `headers:` can be set once on the client or overridden per call:
+
+```ruby
+client = RubyDecisionModel::Client.new(
+  headers: { "HTTP-Referer" => "https://example.com", "X-Title" => "My App" }
+)
+
+client.ask(state: state, questions: questions,
+           model: "jev-preview",
+           headers: { "X-Trace-Id" => trace_id })
+```
+
+Headers merge provider, then client, then call, matched without regard to case,
+so an override replaces a provider header rather than being sent beside it. A
+per-call `model:` goes through the provider's aliases like any other and leaves
+`client.model` alone. A header name or value carrying a newline raises
+`ConfigurationError` naming the header, rather than an `ArgumentError` from
+inside `Net::HTTP` on the first request.
 
 ### Model aliases
 
