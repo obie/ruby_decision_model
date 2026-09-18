@@ -16,7 +16,7 @@ Gem::Specification.new do |spec|
                       "confidence, legends, and usage."
   spec.homepage = "https://github.com/obie/ruby_decision_model"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.1"
+  spec.required_ruby_version = ">= 3.2"
 
   spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"

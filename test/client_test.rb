@@ -127,6 +127,30 @@ class ClientTest < Minitest::Test
     assert_equal "resp_1", response.id
   end
 
+
+  def test_symbol_question_ids_and_keys_match_string_answers
+    transport = FakeTransport.new([[200, success_body]])
+    client = build_client(transport)
+    symbol_questions = {
+      urgent: { type: "noul", instructions: "Is this urgent?" },
+      category: { type: "choice", instructions: "Pick", criteria: { "bug" => nil, "feature" => nil } },
+      severity: { type: "score", instructions: "Rate", criteria: %w[low medium high] }
+    }
+
+    response = client.ask(state: {}, questions: symbol_questions)
+
+    assert_in_delta 0.82, response["urgent"].noul
+    assert_equal "bug", response["category"].choice
+  end
+
+  def test_exception_then_retryable_status_raises_after_two_attempts
+    transport = FakeTransport.new([Net::ReadTimeout.new, [503, "{}"]])
+    client = build_client(transport)
+
+    assert_raises(RubyDecisionModel::ApiError) { client.ask(state: {}, questions: questions) }
+    assert_equal 2, transport.calls.length
+  end
+
   # --- malformed / invalid responses ---
 
   def test_non_json_body_raises_invalid_response

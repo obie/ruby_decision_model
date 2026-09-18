@@ -8,6 +8,7 @@ module RubyDecisionModel
   class Client
     DEFAULT_BASE_URL = "https://openrouter.ai/api/alpha"
     DEFAULT_MODEL = "typesafe/jev-1.13"
+    MAX_ATTEMPTS = 2
     RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 524, 529].freeze
     RETRYABLE_EXCEPTIONS = [
       Net::OpenTimeout,
@@ -67,28 +68,26 @@ module RubyDecisionModel
     end
 
     def perform_with_retry(url:, headers:, body:)
-      attempt = 0
+      attempts = 0
 
-      begin
-        status, response_body = @transport.call(url: url, headers: headers, body: body)
-
-        if RETRYABLE_STATUSES.include?(status) && attempt.zero?
-          attempt += 1
-          @sleeper.call(backoff_seconds)
+      loop do
+        attempts += 1
+        begin
           status, response_body = @transport.call(url: url, headers: headers, body: body)
+        rescue *RETRYABLE_EXCEPTIONS => e
+          raise_transport_error(e) if attempts >= MAX_ATTEMPTS
+
+          @sleeper.call(backoff_seconds)
+          next
+        rescue Error
+          raise
+        rescue StandardError => e
+          raise_transport_error(e)
         end
 
-        [status, response_body]
-      rescue *RETRYABLE_EXCEPTIONS => e
-        if attempt.zero?
-          attempt += 1
-          @sleeper.call(backoff_seconds)
-          retry
-        end
-        raise_transport_error(e)
-      rescue StandardError => e
-        raise_transport_error(e) unless e.is_a?(Error)
-        raise
+        return [status, response_body] unless RETRYABLE_STATUSES.include?(status) && attempts < MAX_ATTEMPTS
+
+        @sleeper.call(backoff_seconds)
       end
     end
 
@@ -135,9 +134,10 @@ module RubyDecisionModel
       malformed = []
       missing = []
 
-      questions.each do |id, question|
+      questions.each do |raw_id, question|
+        id = raw_id.to_s
         answer_hash = raw_answers[id]
-        expected_type = question["type"]
+        expected_type = question_type(question)
 
         if answer_hash.is_a?(Hash) && answer_hash["type"] == expected_type
           begin
@@ -207,6 +207,12 @@ module RubyDecisionModel
       else
         raise MalformedAnswer
       end
+    end
+
+    def question_type(question)
+      return nil unless question.is_a?(Hash)
+
+      question["type"] || question[:type]
     end
 
     def hash_or_empty(value)
