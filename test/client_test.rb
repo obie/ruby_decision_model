@@ -313,7 +313,7 @@ class ClientTest < Minitest::Test
     assert_equal({}, response["urgent"].probabilities)
   end
 
-  def test_junk_usage_fields_become_nil
+  def test_junk_usage_fields_are_rejected_rather_than_nilled
     body = JSON.generate(
       "id" => "resp_4",
       "model" => "typesafe/jev-1.13",
@@ -327,10 +327,23 @@ class ClientTest < Minitest::Test
     transport = FakeTransport.new([[200, body]])
     client = build_client(transport)
 
-    response = client.ask(state: {}, questions: questions)
+    error = assert_raises(RubyDecisionModel::InvalidResponse) { client.ask(state: {}, questions: questions) }
+    assert_match(/usage\.input_tokens is not a token count/, error.message)
+  end
 
-    assert_nil response.usage.input_tokens
-    assert_nil response.usage.output_tokens
-    assert_nil response.usage.cost
+  def test_an_absent_usage_field_is_still_nil
+    body = JSON.generate(
+      "id" => "resp_4b",
+      "model" => "typesafe/jev-1.13",
+      "answers" => { "urgent" => { "type" => "noul", "noul" => 0.5 } },
+      "usage" => { "input_tokens" => 120 }
+    )
+    client = build_client(FakeTransport.new([[200, body]]))
+
+    usage = client.ask(state: {}, questions: { "urgent" => questions["urgent"] }).usage
+
+    assert_equal 120, usage.input_tokens
+    assert_nil usage.output_tokens
+    assert_nil usage.cost
   end
 end

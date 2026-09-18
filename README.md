@@ -54,6 +54,9 @@ client = RubyDecisionModel::Client.new(api_key: "sk-or-...")
 
 Requests go to `https://openrouter.ai/api/alpha/decisions`. The default model is
 `typesafe/jev-1.13`. Usage reports `input_tokens`, `output_tokens`, and `cost`.
+A usage field the provider omits is `nil`; one that is present but is not a
+whole token count raises `InvalidResponse` rather than being rounded off or
+turned into `nil`.
 
 ### Typesafe native API
 
