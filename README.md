@@ -46,4 +46,4 @@ response.usage.cost           # => 0.0012
 
 Status: 0.0.1, API may change.
 
-The companion gem `ruby_dm` builds decisions and verdicts on top of this client.
+The companion gem `decide` builds decisions and verdicts on top of this client.
