@@ -2,53 +2,91 @@
 
 require "json"
 require "net/http"
+require "openssl"
 require "uri"
 
 module RubyDecisionModel
   class Client
-    DEFAULT_BASE_URL = "https://openrouter.ai/api/alpha"
-    DEFAULT_MODEL = "typesafe/jev-1.13"
-    MAX_ATTEMPTS = 2
-    RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 524, 529].freeze
-    RETRYABLE_EXCEPTIONS = [
-      Net::OpenTimeout,
-      Net::ReadTimeout,
-      Errno::ECONNRESET,
-      Errno::ECONNREFUSED,
-      Errno::EPIPE,
-      SocketError,
-      IOError
-    ].freeze
+    REQUEST_ID_HEADER = "x-typesafe-request-id"
 
-    def initialize(api_key:, model: DEFAULT_MODEL, base_url: DEFAULT_BASE_URL, timeout: 5,
-                    transport: nil, sleeper: ->(seconds) { sleep(seconds) })
-      raise ConfigurationError, "api_key is required" if api_key.nil? || api_key.to_s.strip.empty?
-      raise ConfigurationError, "model is required" if model.nil? || model.to_s.strip.empty?
-      raise ConfigurationError, "base_url is required" if base_url.nil? || base_url.to_s.strip.empty?
+    # Kept from 0.0.1 for callers that referenced them. They describe the
+    # OpenRouter provider and the default RetryPolicy; prefer those directly.
+    DEFAULT_BASE_URL = Providers::OpenRouter.new.default_base_url
+    DEFAULT_MODEL = Providers::OpenRouter.new.default_model
+    MAX_ATTEMPTS = RetryPolicy.new.max_retries + 1
+    RETRYABLE_STATUSES = RetryPolicy::DEFAULT_STATUSES
+    RETRYABLE_EXCEPTIONS = (RetryPolicy::TIMEOUT_EXCEPTIONS + RetryPolicy::CONNECTION_EXCEPTIONS).freeze
 
-      @api_key = api_key
-      @model = model
-      @base_url = base_url.to_s.chomp("/")
+    attr_reader :provider, :model, :retry_policy, :timeout
+
+    # provider:  :open_router, :typesafe, or a Providers::Base instance. When
+    #            nil, api_key: alone selects OpenRouter; otherwise the
+    #            environment decides (TYPESAFE_API_KEY, then OPENROUTER_API_KEY).
+    # api_key:   overrides the provider's env var.
+    # model:     nil means the provider default; aliases resolve per provider.
+    # base_url:  overrides the provider base URL.
+    # transport: callable(url:, headers:, body:) returning
+    #            [status, body_string, headers_hash] (a 2-element return is
+    #            still accepted and treated as having no headers).
+    # retry:     a RetryPolicy or a Hash of overrides.
+    # random:    callable returning a Float in 0...1, used for backoff jitter.
+    # clock:     callable returning monotonic seconds, used for total_timeout.
+    def initialize(provider: nil, api_key: nil, model: nil, base_url: nil, timeout: 5,
+                   transport: nil, sleeper: ->(seconds) { sleep(seconds) }, retry: {},
+                   random: -> { rand }, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
+      @provider = resolve_provider(provider, api_key: api_key, base_url: base_url)
+      unless @provider.api_key?
+        raise ConfigurationError,
+              "api_key is required for #{@provider.name}: pass api_key: or set #{@provider.env_var}"
+      end
+
+      @model = @provider.resolve_model(model)
       @timeout = timeout
       @transport = transport || default_transport
       @sleeper = sleeper
+      @retry_policy = RetryPolicy.from(binding.local_variable_get(:retry))
+      @random = random
+      @clock = clock
+    end
+
+    def base_url
+      @provider.base_url
     end
 
     def ask(state:, questions:)
       raise RequestError, "questions must not be empty" if questions.nil? || questions.empty?
 
-      body = JSON.generate({ "model" => @model, "state" => state, "questions" => questions })
-      headers = {
-        "Authorization" => "Bearer #{@api_key}",
-        "Content-Type" => "application/json",
-        "Accept" => "application/json"
-      }
-
-      status, response_body = perform_with_retry(url: "#{@base_url}/decisions", headers: headers, body: body)
-      handle_response(status, response_body, questions)
+      body = @provider.request_body(model: @model, state: state, questions: questions)
+      status, response_body, response_headers = perform_with_retry(
+        url: @provider.url, headers: @provider.headers, body: body
+      )
+      handle_response(status, response_body, response_headers, questions)
     end
 
     private
+
+    def resolve_provider(provider, api_key:, base_url:)
+      case provider
+      when Providers::Base
+        return provider if api_key.nil? && base_url.nil?
+
+        # Never mutate a provider the caller may share between clients.
+        provider.dup.configure(api_key: api_key, base_url: base_url)
+      when Symbol, String
+        Providers.build(provider, api_key: api_key, base_url: base_url)
+      when nil
+        if api_key.nil?
+          Providers.from_env&.configure(base_url: base_url) || raise(
+            ConfigurationError,
+            "no provider configured: pass provider: or api_key:, or set one of #{Providers.env_vars.join(', ')}"
+          )
+        else
+          Providers.build(:open_router, api_key: api_key, base_url: base_url)
+        end
+      else
+        raise ConfigurationError, "provider must be a Symbol or a Providers::Base, got #{provider.class}"
+      end
+    end
 
     def default_transport
       lambda do |url:, headers:, body:|
@@ -63,64 +101,93 @@ module RubyDecisionModel
         request.body = body
 
         response = http.request(request)
-        [response.code.to_i, response.body]
+        [response.code.to_i, response.body, response.each_header.to_h]
       end
     end
 
     def perform_with_retry(url:, headers:, body:)
-      attempts = 0
+      policy = @retry_policy
+      started_at = @clock.call
+      retries = 0
 
       loop do
-        attempts += 1
         begin
-          status, response_body = @transport.call(url: url, headers: headers, body: body)
-        rescue *RETRYABLE_EXCEPTIONS => e
-          raise_transport_error(e) if attempts >= MAX_ATTEMPTS
-
-          @sleeper.call(backoff_seconds)
-          next
+          status, response_body, response_headers = normalize_transport_result(
+            @transport.call(url: url, headers: headers, body: body)
+          )
         rescue Error
           raise
         rescue StandardError => e
-          raise_transport_error(e)
+          raise_transport_error(e) unless policy.retryable_exception?(e) && retries < policy.max_retries
+
+          delay = policy.backoff(retries, random: @random)
+          raise_transport_error(e) if budget_exceeded?(policy, started_at, delay)
+
+          @sleeper.call(delay)
+          raise_transport_error(e) if budget_exceeded?(policy, started_at, 0.0)
+
+          retries += 1
+          next
         end
 
-        return [status, response_body] unless RETRYABLE_STATUSES.include?(status) && attempts < MAX_ATTEMPTS
+        result = [status, response_body, response_headers]
+        return result unless policy.retryable_status?(status) && retries < policy.max_retries
 
-        @sleeper.call(backoff_seconds)
+        delay = policy.delay(retries, headers: response_headers, random: @random)
+        return result if budget_exceeded?(policy, started_at, delay)
+
+        @sleeper.call(delay)
+        return result if budget_exceeded?(policy, started_at, 0.0)
+
+        retries += 1
       end
     end
 
-    def backoff_seconds
-      0.5 + (rand * 0.25)
+    def budget_exceeded?(policy, started_at, delay)
+      return false if policy.total_timeout.nil?
+
+      (@clock.call - started_at) + delay > policy.total_timeout
+    end
+
+    def normalize_transport_result(result)
+      status, response_body, response_headers = Array(result)
+      [status, response_body, response_headers.is_a?(Hash) ? response_headers : {}]
     end
 
     def raise_transport_error(exception)
-      if exception.is_a?(Net::OpenTimeout) || exception.is_a?(Net::ReadTimeout)
+      if @retry_policy.timeout_exception?(exception)
         raise TimeoutError.new("request timed out: #{exception.message}", cause_error: exception)
       end
 
       raise TransportError.new("transport error: #{exception.message}", cause_error: exception)
     end
 
-    def handle_response(status, response_body, questions)
+    def handle_response(status, response_body, response_headers, questions)
       case status
       when 200..299
-        parse_success(response_body, questions)
+        parse_success(response_body, response_headers, questions)
       when 401
-        raise Unauthorized.new("unauthorized", status: status, body: response_body)
+        raise Unauthorized.new("unauthorized", status: status, body: response_body, headers: response_headers)
       when 413
-        raise PayloadTooLarge.new("payload too large", status: status, body: response_body)
+        raise PayloadTooLarge.new("payload too large", status: status, body: response_body, headers: response_headers)
+      when 422
+        raise UnprocessableEntity.new("unprocessable entity", status: status, body: response_body,
+                                                              headers: response_headers)
       when 429
-        raise RateLimited.new("rate limited", status: status, body: response_body)
+        raise RateLimited.new("rate limited", status: status, body: response_body, headers: response_headers)
+      when 529
+        raise Overloaded.new("overloaded", status: status, body: response_body, headers: response_headers)
       else
-        raise ApiError.new("api error (status #{status})", status: status, body: response_body)
+        raise ApiError.new("api error (status #{status})", status: status, body: response_body,
+                                                            headers: response_headers)
       end
     end
 
-    def parse_success(response_body, questions)
+    def parse_success(response_body, response_headers, questions)
+      raise InvalidResponse, "response body was empty" if response_body.nil? || response_body.to_s.strip.empty?
+
       parsed = begin
-        JSON.parse(response_body)
+        JSON.parse(response_body.to_s)
       rescue JSON::ParserError => e
         raise InvalidResponse, "response body was not valid JSON: #{e.message}"
       end
@@ -167,11 +234,23 @@ module RubyDecisionModel
 
       Response.new(
         answers: normalized,
-        usage: normalize_usage(parsed["usage"]),
+        usage: @provider.usage(parsed),
         model: parsed["model"],
         id: parsed["id"],
-        raw: parsed
+        raw: parsed,
+        request_id: request_id_from(response_headers)
       )
+    end
+
+    def request_id_from(headers)
+      return nil unless headers.is_a?(Hash)
+
+      headers.each do |key, value|
+        next unless key.to_s.casecmp?(REQUEST_ID_HEADER)
+
+        return value.is_a?(Array) ? value.first : value
+      end
+      nil
     end
 
     class MalformedAnswer < StandardError; end
@@ -217,16 +296,6 @@ module RubyDecisionModel
 
     def hash_or_empty(value)
       value.is_a?(Hash) ? value : {}
-    end
-
-    def normalize_usage(usage)
-      usage = {} unless usage.is_a?(Hash)
-
-      Response::Usage.new(
-        input_tokens: Integer(usage["input_tokens"], exception: false),
-        output_tokens: Integer(usage["output_tokens"], exception: false),
-        cost: Float(usage["cost"], exception: false)
-      )
     end
   end
 end
