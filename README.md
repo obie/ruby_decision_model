@@ -124,6 +124,15 @@ Answers come back typed: `Answers::Noul` (`noul`, `probabilities`),
 `response.nouls`, `response.choices`, and `response.scores` return the answers
 of one type keyed the same way as `response.answers`.
 
+`ask` validates the whole questions map before it sends anything: every value
+must be a Hash with a known `type`, `instructions`, and the `criteria` its type
+requires, and two ids must not collide once stringified (`:a` and `"a"` would
+be one answer for two questions). A question that cannot be answered raises
+`RequestError` naming its id, rather than being billed as input tokens and
+coming back as a 422 or a missing answer. Hand-rolled question hashes are held
+to the same rules as the builders'; `Questions.validate!(question, id:)` runs
+them on its own.
+
 Score `probabilities` and `legend` are keyed by the wire's string level keys
 (`"0"`, `"1"`, ...), not by the criteria labels. Choice `probabilities` sum to
 approximately 1; treat them as calibrated, not normalized.
@@ -172,7 +181,7 @@ return is still accepted and treated as having no headers, which means no
 | Error | Meaning |
 | --- | --- |
 | `ConfigurationError` | No provider could be resolved, missing api_key, unknown provider, or bad `retry:` value |
-| `RequestError` | Questions hash was empty |
+| `RequestError` | Questions hash was empty, or a question could not be sent as written |
 | `TransportError` (`TimeoutError`) | Network or timeout failure after retries, carries `#cause_error` |
 | `ApiError` | Non-2xx response, carries `#status`, `#body`, and `#headers` |
 | `Unauthorized` | 401 |

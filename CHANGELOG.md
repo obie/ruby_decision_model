@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `ask` validates the questions map before sending it. A value that is not a
+  Hash, an unknown or missing `type`, missing or empty `instructions`, missing
+  or wrongly sized `criteria`, a blank id, or two ids that collide once
+  stringified all raise `RequestError` naming the id. Previously any of these
+  was serialized, sent, and billed, and came back as a 422 or a
+  `MissingAnswers`.
+- Added `Questions.validate!(question, id:)`, the same check as a public
+  method.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.

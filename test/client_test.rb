@@ -282,21 +282,16 @@ class ClientTest < Minitest::Test
     assert_includes error.message, "severity"
   end
 
-  def test_unsupported_question_type_raises_invalid_response
+  def test_unsupported_question_type_is_refused_before_the_request
     weird_questions = { "mystery" => { "type" => "unknown", "instructions" => "huh" } }
-    body = JSON.generate(
-      "id" => "resp_9",
-      "model" => "typesafe/jev-1.13",
-      "answers" => { "mystery" => { "type" => "unknown", "value" => "x" } },
-      "usage" => {}
-    )
-    transport = FakeTransport.new([[200, body]])
+    transport = FakeTransport.new([[200, success_body]])
     client = build_client(transport)
 
-    error = assert_raises(RubyDecisionModel::InvalidResponse) do
+    error = assert_raises(RubyDecisionModel::RequestError) do
       client.ask(state: {}, questions: weird_questions)
     end
     assert_includes error.message, "mystery"
+    assert_empty transport.calls
   end
 
   def test_non_hash_probabilities_fall_back_to_empty_hash

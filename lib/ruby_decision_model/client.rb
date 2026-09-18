@@ -54,7 +54,7 @@ module RubyDecisionModel
     end
 
     def ask(state:, questions:)
-      raise RequestError, "questions must not be empty" if questions.nil? || questions.empty?
+      validate_questions!(questions)
 
       body = @provider.request_body(model: @model, state: state, questions: questions)
       status, response_body, response_headers = perform_with_retry(
@@ -64,6 +64,33 @@ module RubyDecisionModel
     end
 
     private
+
+    # A question the API will refuse is worth catching here: the request is
+    # billed by input tokens, so sending one that cannot be answered costs
+    # money to be told what the client already knew.
+    def validate_questions!(questions)
+      raise RequestError, "questions must not be empty" if questions.nil? || questions.empty?
+
+      unless questions.is_a?(Hash)
+        raise RequestError, "questions must be a Hash of id => question, got #{questions.class}"
+      end
+
+      seen = {}
+      questions.each_key do |raw_id|
+        id = raw_id.to_s
+        raise RequestError, "question id #{raw_id.inspect} is blank" if id.strip.empty?
+
+        # Answers come back keyed by the stringified id, so :a and "a" would
+        # be one answer for two questions.
+        if seen.key?(id)
+          raise RequestError,
+                "question ids #{seen[id].inspect} and #{raw_id.inspect} are both #{id.inspect} on the wire"
+        end
+
+        seen[id] = raw_id
+        Questions.validate!(questions[raw_id], id: id)
+      end
+    end
 
     def resolve_provider(provider, api_key:, base_url:)
       case provider
