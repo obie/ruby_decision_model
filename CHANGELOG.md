@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `ApiError` parses a JSON error body into `#detail`, `#error_code`, and
+  `#parsed_body`, and appends the detail to the exception message. Typesafe's
+  422 names the offending field and OpenRouter answers with
+  `{"error": {"code", "message"}}`; both used to arrive as an opaque string on
+  `#body` under a message that said only "unprocessable entity". A body that
+  is not a JSON object leaves all three nil and the message unchanged.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
