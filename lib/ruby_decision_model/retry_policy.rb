@@ -144,12 +144,7 @@ module RubyDecisionModel
     end
 
     def header_value(headers, name)
-      headers.each do |key, value|
-        next unless key.to_s.casecmp?(name)
-
-        return value.is_a?(Array) ? value.first : value
-      end
-      nil
+      Headers.fetch(headers, name)
     end
   end
 end
