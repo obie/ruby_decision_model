@@ -39,9 +39,18 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to commit SHAs, not tags. This job holds
+      # id-token: write, so every step in it can ask GitHub for the OIDC
+      # token that RubyGems trades for a publishing key. A tag is a mutable
+      # pointer; whoever can move it can change what runs here. The trailing
+      # comment is the version the SHA was, for whoever bumps it next.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+        with:
+          # The job never pushes, and a token left in .git/config is one more
+          # thing a later step could pick up.
+          persist-credentials: false
 
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
         with:
           ruby-version: .ruby-version
           bundler-cache: true
@@ -79,14 +88,24 @@ jobs:
       - name: Is this version already on RubyGems?
         id: check
         run: |
-          status=$(bundle exec rake release:status)
+          # Take the one line that is the answer, not whatever else reached
+          # stdout. Today there is nothing else -- rake prints the one line
+          # and bundler's warnings go to stderr -- but this decides whether
+          # credentials are fetched and a gem is pushed, and GITHUB_OUTPUT is
+          # parsed as key=value lines. Anchoring it costs nothing and turns a
+          # surprise into a failed step.
+          status=$(bundle exec rake release:status | grep -Ex 'publish=(true|false)' | tail -n 1)
+          if [ -z "$status" ]; then
+            echo "::error::rake release:status printed no publish=true or publish=false line"
+            exit 1
+          fi
           echo "$status"
           echo "$status" >> "$GITHUB_OUTPUT"
 
       # Exchanges the OIDC token for a short-lived RubyGems API key and writes
       # it where `gem push` looks. The gem must list this repo, this workflow
       # file, and the release environment as a trusted publisher on RubyGems.
-      - uses: rubygems/configure-rubygems-credentials@v2.1.0
+      - uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
         if: steps.check.outputs.publish == 'true'
 
       - name: Push to RubyGems
