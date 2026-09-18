@@ -16,13 +16,25 @@ task default: :test
 namespace :release do
   gemspec = -> { Gem::Specification.load(Dir["*.gemspec"].first) }
 
+  # Whether this version is already on RubyGems. Only a 404 counts as "no":
+  # it is the answer to "has this gem ever been published", and it is the one
+  # HTTP error that means anything here. A 500, a rate limit, or a timeout is
+  # not an answer, and treating it as one would have release:push fall through
+  # to a `gem push` of something that may already be out there -- which is
+  # exactly the case this check exists to avoid.
   published = lambda do |spec|
     require "open-uri"
     require "json"
-    body = URI.open("https://rubygems.org/api/v1/versions/#{spec.name}.json", &:read)
-    JSON.parse(body).any? { |v| v["number"] == spec.version.to_s }
-  rescue OpenURI::HTTPError
-    false # 404 => the gem has never been published, so there is nothing to skip
+    url = "https://rubygems.org/api/v1/versions/#{spec.name}.json"
+    body = URI.parse(url).open(open_timeout: 10, read_timeout: 30, &:read)
+    versions = JSON.parse(body)
+    raise "rubygems.org returned #{versions.class} for #{url}, expected an array" unless versions.is_a?(Array)
+
+    versions.any? { |v| v.is_a?(Hash) && v["number"] == spec.version.to_s }
+  rescue OpenURI::HTTPError => e
+    raise unless e.io.status.first.to_s == "404"
+
+    false # never published, so there is nothing to skip
   end
 
   desc "Build the gem into pkg/ with --strict (proof the gemspec is valid). " \

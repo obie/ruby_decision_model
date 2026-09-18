@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `rake release:status` and `rake release:push` no longer read every HTTP
+  error from rubygems.org as "this version was never published". Only a 404
+  means that; a 500, a rate limit, or a timeout now raises and fails the
+  release rather than falling through to a `gem push` of a version that may
+  already be out. The lookup also has explicit timeouts and checks that the
+  response is the array it expects.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
