@@ -35,6 +35,7 @@ module RubyDecisionModel
                    transport: nil, sleeper: ->(seconds) { sleep(seconds) }, retry: {},
                    random: -> { rand }, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
       @provider = resolve_provider(provider, api_key: api_key, base_url: base_url)
+      validate_answer_contract(@provider)
       unless @provider.api_key?
         raise ConfigurationError,
               "api_key is required for #{@provider.name}: pass api_key: or set #{@provider.env_var}"
@@ -85,6 +86,23 @@ module RubyDecisionModel
         end
       else
         raise ConfigurationError, "provider must be a Symbol or a Providers::Base, got #{provider.class}"
+      end
+    end
+
+    # A provider that requires a field the client does not model would be
+    # declaring a contract nothing enforces. Say so when the client is built
+    # rather than letting the guarantee quietly do nothing.
+    def validate_answer_contract(provider)
+      provider.required_answer_fields.each do |type, names|
+        known = ANSWER_FIELDS[type]
+        raise ConfigurationError, "#{provider.name} requires fields for unknown answer type #{type.inspect}" if known.nil?
+
+        unknown = names.map(&:to_s) - known.keys
+        next if unknown.empty?
+
+        raise ConfigurationError,
+              "#{provider.name} requires answer fields the client does not model: " \
+              "#{unknown.join(', ')} on #{type} answers"
       end
     end
 
@@ -208,9 +226,9 @@ module RubyDecisionModel
 
         if answer_hash.is_a?(Hash) && answer_hash["type"] == expected_type
           begin
-            normalized[id] = normalize_answer(expected_type, answer_hash)
-          rescue MalformedAnswer
-            malformed << id
+            normalized[id] = normalize_answer(expected_type, answer_hash, question)
+          rescue MalformedAnswer => e
+            malformed << "#{id} (#{e.message})"
           end
         else
           missing << id
@@ -219,7 +237,7 @@ module RubyDecisionModel
 
       if malformed.any?
         raise InvalidResponse.new(
-          "malformed answer fields for: #{malformed.join(', ')}",
+          "malformed answer fields for: #{malformed.join('; ')}",
           answers: normalized
         )
       end
@@ -255,36 +273,106 @@ module RubyDecisionModel
 
     class MalformedAnswer < StandardError; end
 
-    def normalize_answer(type, hash)
+    # Every field an answer can carry, and the shape each one has to have.
+    # A field absent from this map is ignored; Response#raw still has it.
+    ANSWER_FIELDS = {
+      # Neither provider's schema has probabilities on a noul answer -- the
+      # value is the probability -- but it is read when one turns up rather
+      # than dropped, and Answers::Noul has carried the field since 0.0.1.
+      "noul" => { "noul" => :probability, "probabilities" => :distribution },
+      "choice" => { "choice" => :label, "confidence" => :probability, "probabilities" => :distribution },
+      "score" => { "score" => :number, "confidence" => :probability,
+                   "probabilities" => :distribution, "legend" => :map }
+    }.freeze
+
+    # Probabilities are floats off a model, so a distribution can land a hair
+    # over 1.0 without being wrong.
+    PROBABILITY_TOLERANCE = 1e-6
+
+    def normalize_answer(type, hash, question)
+      fields = ANSWER_FIELDS[type]
+      raise MalformedAnswer, "unsupported answer type #{type.inspect}" if fields.nil?
+
+      required = @provider.required_answer_fields.fetch(type, fields.keys)
+      values = fields.to_h { |name, shape| [name, read_answer_field(hash, name, shape, required)] }
+      check_choice_is_offered(values["choice"], question) if type == "choice"
+
+      build_answer(type, values)
+    end
+
+    def read_answer_field(hash, name, shape, required)
+      raw = hash[name]
+
+      if raw.nil?
+        raise MalformedAnswer, "#{name} is missing" if required.include?(name)
+
+        return %i[distribution map].include?(shape) ? {} : nil
+      end
+
+      case shape
+      when :probability then unit_interval(name, raw)
+      when :number then finite_number(name, raw)
+      when :label then label(name, raw)
+      when :distribution then distribution(name, raw)
+      when :map then raw.is_a?(Hash) ? raw : raise(MalformedAnswer, "#{name} is not an object")
+      end
+    end
+
+    def finite_number(name, raw)
+      raise MalformedAnswer, "#{name} is not a number" unless raw.is_a?(Numeric)
+      # JSON turns 1e999 into Infinity and some encoders emit NaN. Neither is
+      # an answer, and both survive every is_a?(Numeric) check downstream.
+      raise MalformedAnswer, "#{name} is not finite (#{raw})" unless raw.finite?
+
+      raw.to_f
+    end
+
+    def unit_interval(name, raw)
+      value = finite_number(name, raw)
+      unless value >= -PROBABILITY_TOLERANCE && value <= 1.0 + PROBABILITY_TOLERANCE
+        raise MalformedAnswer, "#{name} is outside 0..1 (#{value})"
+      end
+
+      value.clamp(0.0, 1.0)
+    end
+
+    def label(name, raw)
+      raise MalformedAnswer, "#{name} is not a string" unless raw.is_a?(String)
+      raise MalformedAnswer, "#{name} is empty" if raw.empty?
+
+      raw
+    end
+
+    def distribution(name, raw)
+      raise MalformedAnswer, "#{name} is not an object" unless raw.is_a?(Hash)
+
+      raw.to_h { |key, value| [key, unit_interval("#{name}[#{key.inspect}]", value)] }
+    end
+
+    # A choice the question never offered cannot be routed on, and reading it
+    # as a label the application knows is exactly the mistake this guards.
+    def check_choice_is_offered(choice, question)
+      return if choice.nil?
+
+      criteria = question.is_a?(Hash) ? (question["criteria"] || question[:criteria]) : nil
+      return unless criteria.is_a?(Hash)
+
+      offered = criteria.keys.map(&:to_s)
+      return if offered.include?(choice)
+
+      raise MalformedAnswer, "choice #{choice.inspect} is not one of the question's criteria (#{offered.join(', ')})"
+    end
+
+    def build_answer(type, values)
       case type
       when "noul"
-        noul = hash["noul"]
-        raise MalformedAnswer unless noul.is_a?(Numeric)
-
-        Answers::Noul.new(noul: noul.to_f, probabilities: hash_or_empty(hash["probabilities"]))
+        Answers::Noul.new(noul: values["noul"], probabilities: values["probabilities"])
       when "choice"
-        choice = hash["choice"]
-        confidence = hash["confidence"]
-        raise MalformedAnswer unless choice.is_a?(String) && confidence.is_a?(Numeric)
-
-        Answers::Choice.new(
-          choice: choice,
-          confidence: confidence.to_f,
-          probabilities: hash_or_empty(hash["probabilities"])
-        )
+        Answers::Choice.new(choice: values["choice"], confidence: values["confidence"],
+                            probabilities: values["probabilities"])
       when "score"
-        score = hash["score"]
-        confidence = hash["confidence"]
-        raise MalformedAnswer unless score.is_a?(Numeric) && confidence.is_a?(Numeric)
-
-        Answers::Score.new(
-          score: score.to_f,
-          confidence: confidence.to_f,
-          probabilities: hash_or_empty(hash["probabilities"]),
-          legend: hash_or_empty(hash["legend"])
-        )
-      else
-        raise MalformedAnswer
+        Answers::Score.new(score: values["score"], confidence: values["confidence"],
+                           probabilities: values["probabilities"], legend: values["legend"])
       end
     end
 
@@ -294,8 +382,5 @@ module RubyDecisionModel
       question["type"] || question[:type]
     end
 
-    def hash_or_empty(value)
-      value.is_a?(Hash) ? value : {}
-    end
   end
 end

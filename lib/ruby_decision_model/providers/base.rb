@@ -47,6 +47,23 @@ module RubyDecisionModel
         false
       end
 
+      # The answer fields this provider's published contract declares
+      # required. The client raises InvalidResponse when one is missing
+      # instead of quietly substituting nil or an empty Hash, and leaves the
+      # rest nil when a provider does not send them.
+      #
+      # The default is the minimum that makes an answer an answer: the value
+      # field itself. A provider that guarantees more says so.
+      MINIMUM_ANSWER_FIELDS = {
+        "noul" => %w[noul],
+        "choice" => %w[choice],
+        "score" => %w[score]
+      }.freeze
+
+      def required_answer_fields
+        MINIMUM_ANSWER_FIELDS
+      end
+
       def base_url
         (@base_url || default_base_url).to_s.chomp("/")
       end

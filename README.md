@@ -124,6 +124,33 @@ Answers come back typed: `Answers::Noul` (`noul`, `probabilities`),
 `response.nouls`, `response.choices`, and `response.scores` return the answers
 of one type keyed the same way as `response.answers`.
 
+### What counts as a valid answer
+
+Each provider declares which answer fields its published contract guarantees,
+and the client holds it to that rather than to one shared guess.
+
+| | OpenRouter requires | Typesafe requires |
+| --- | --- | --- |
+| noul | `noul` | `noul` |
+| choice | `choice` | `choice`, `confidence`, `probabilities` |
+| score | `score` | `score`, `confidence`, `probabilities`, `legend` |
+
+A required field that is missing raises `InvalidResponse` naming the question
+and the field. A field the provider does not guarantee comes back `nil`, or
+`{}` for a map, rather than raising: OpenRouter's schema makes `confidence`
+optional, so `answer.confidence` can be `nil` there. A field that is present
+but the wrong shape always raises; it is never replaced with an empty value.
+
+Numbers are checked as well as typed. `noul`, `confidence`, and every value in
+a `probabilities` map must be finite and within 0..1 — `1e999` parses to
+`Infinity` and would otherwise sail through an `is_a?(Numeric)` check — and a
+`choice` must be one of the keys the question's `criteria` offered, so a label
+the application has no branch for cannot reach its routing.
+
+A provider written by hand declares its own contract with
+`required_answer_fields`; naming a field the client does not model raises
+`ConfigurationError` when the client is built.
+
 Score `probabilities` and `legend` are keyed by the wire's string level keys
 (`"0"`, `"1"`, ...), not by the criteria labels. Choice `probabilities` sum to
 approximately 1; treat them as calibrated, not normalized.

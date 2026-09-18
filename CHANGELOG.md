@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Answer validation follows each provider's published contract instead of one
+  shared guess. Typesafe documents `probabilities`, `confidence`, and `legend`
+  as required, and a response missing one now raises `InvalidResponse` rather
+  than being handed back with an empty Hash in its place. OpenRouter's schema
+  requires only `type` plus `choice`/`score`, and answers without a
+  `confidence` are no longer rejected there; `confidence` is `nil` instead.
+  Providers declare this with `required_answer_fields`.
+- Numeric answer fields are checked for finiteness and range. `noul`,
+  `confidence`, and probability values must be finite and within 0..1;
+  `{"noul": 1e999}` parses to `Infinity` and used to be accepted.
+- A `choice` that is not one of the question's own criteria raises
+  `InvalidResponse` instead of reaching application routing as an unknown
+  label.
+- `InvalidResponse` messages now name the field that was wrong, not just the
+  question id.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
