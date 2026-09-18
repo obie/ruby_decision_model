@@ -13,7 +13,7 @@ module RubyDecisionModel
 
       def initialize(api_key: nil, base_url: nil)
         @api_key = api_key || ENV.fetch(env_var, nil)
-        @base_url = base_url
+        @base_url = base_url || env_value(base_url_env)
       end
 
       # Identifier used in error messages and by Client#provider.
@@ -23,6 +23,16 @@ module RubyDecisionModel
 
       def env_var
         raise NotImplementedError
+      end
+
+      # Environment variables a provider reads besides its API key, or nil
+      # when it has none. Explicit arguments still win over both.
+      def base_url_env
+        nil
+      end
+
+      def default_model_env
+        nil
       end
 
       def default_base_url
@@ -59,10 +69,16 @@ module RubyDecisionModel
         !(api_key.nil? || api_key.to_s.strip.empty?)
       end
 
-      # Nil or blank means the provider default. Known aliases resolve to the
+      # Nil or blank falls back to the provider's default-model environment
+      # variable, then to its built-in default. Known aliases resolve to the
       # provider's canonical name. Anything else passes through untouched.
       def resolve_model(model)
-        return default_model if model.nil? || model.to_s.strip.empty?
+        if model.nil? || model.to_s.strip.empty?
+          from_env = env_value(default_model_env)
+          return default_model if from_env.nil?
+
+          model = from_env
+        end
 
         aliases.fetch(model.to_s, model.to_s)
       end
@@ -93,6 +109,14 @@ module RubyDecisionModel
       # Keeps the API key out of logs and error output.
       def inspect
         "#<#{self.class.name} name=#{name.inspect} base_url=#{base_url.inspect} api_key=#{api_key? ? '[REDACTED]' : 'nil'}>"
+      end
+
+      # A set, non-blank environment variable, or nil.
+      def env_value(name)
+        return nil if name.nil?
+
+        value = ENV.fetch(name, nil)
+        value.nil? || value.to_s.strip.empty? ? nil : value
       end
 
       # Applies non-nil overrides in place. Used when a caller hands Client a

@@ -87,6 +87,21 @@ client.model      # => "jev-latest" (resolved after aliasing)
 
 Both providers send `User-Agent: ruby_decision_model/<version>`.
 
+### Environment
+
+Each provider reads three variables. An explicit argument always wins, a blank
+value is treated as unset, and one provider never reads another's.
+
+| | Typesafe | OpenRouter |
+| --- | --- | --- |
+| API key | `TYPESAFE_API_KEY` | `OPENROUTER_API_KEY` |
+| Base URL | `TYPESAFE_BASE_URL` | `OPENROUTER_BASE_URL` |
+| Default model | `TYPESAFE_DEFAULT_MODEL` | `OPENROUTER_DEFAULT_MODEL` |
+
+The Typesafe names are the ones the official SDKs read, so a process already
+configured for them needs nothing new. A model from the environment resolves
+through the provider's aliases like any other.
+
 ### Model aliases
 
 Each provider resolves a few friendly names to its own canonical model name.

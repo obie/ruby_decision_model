@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Providers read a base URL and a default model from the environment:
+  `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL`, which the official
+  Typesafe SDKs already define, and `OPENROUTER_BASE_URL` /
+  `OPENROUTER_DEFAULT_MODEL`. Only the API key was read before, so a process
+  configured for the Python or JavaScript SDK had to pass the other two by
+  hand. Explicit arguments still win, and a blank value is treated as unset.
+- Providers declare these with `base_url_env` and `default_model_env`, both
+  nil by default.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.

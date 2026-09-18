@@ -18,6 +18,14 @@ module RubyDecisionModel
         "OPENROUTER_API_KEY"
       end
 
+      def base_url_env
+        "OPENROUTER_BASE_URL"
+      end
+
+      def default_model_env
+        "OPENROUTER_DEFAULT_MODEL"
+      end
+
       def default_base_url
         "https://openrouter.ai/api/alpha"
       end
