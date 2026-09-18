@@ -87,6 +87,13 @@ client.model      # => "jev-latest" (resolved after aliasing)
 
 Both providers send `User-Agent: ruby_decision_model/<version>`.
 
+`base_url` is validated when the client is built. It must be an absolute
+`https` URL with no userinfo, query, or fragment; plain `http` is accepted only
+for `localhost`, `127.0.0.1`, and `[::1]`, where nothing leaves the machine.
+Anything else raises `ConfigurationError`, because every request carries the API
+key in an `Authorization` header and a plaintext or redirected base URL hands
+that key to whoever is listening.
+
 ### Model aliases
 
 Each provider resolves a few friendly names to its own canonical model name.
@@ -171,7 +178,7 @@ return is still accepted and treated as having no headers, which means no
 
 | Error | Meaning |
 | --- | --- |
-| `ConfigurationError` | No provider could be resolved, missing api_key, unknown provider, or bad `retry:` value |
+| `ConfigurationError` | No provider could be resolved, missing api_key, unknown provider, bad `base_url`, or bad `retry:` value |
 | `RequestError` | Questions hash was empty |
 | `TransportError` (`TimeoutError`) | Network or timeout failure after retries, carries `#cause_error` |
 | `ApiError` | Non-2xx response, carries `#status`, `#body`, and `#headers` |

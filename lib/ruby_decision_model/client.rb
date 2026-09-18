@@ -40,6 +40,8 @@ module RubyDecisionModel
               "api_key is required for #{@provider.name}: pass api_key: or set #{@provider.env_var}"
       end
 
+      @provider.validate_base_url!
+
       @model = @provider.resolve_model(model)
       @timeout = timeout
       @transport = transport || default_transport

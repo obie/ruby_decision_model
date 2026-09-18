@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "uri"
 
 module RubyDecisionModel
   module Providers
@@ -57,6 +58,45 @@ module RubyDecisionModel
 
       def api_key?
         !(api_key.nil? || api_key.to_s.strip.empty?)
+      end
+
+      # Hosts that never leave the machine, where plain http carries no risk.
+      LOOPBACK_HOSTS = %w[localhost 127.0.0.1 ::1 [::1]].freeze
+
+      # Every request carries the API key in an Authorization header, so the
+      # base URL has to be one that keeps it secret. Raises unless it is an
+      # absolute http(s) URL, and unless it is https or a loopback host.
+      # Called once when a Client is built, so a bad URL fails before the
+      # first request rather than after the key has already gone out.
+      def validate_base_url!
+        uri = begin
+          URI.parse(base_url)
+        rescue URI::InvalidURIError => e
+          raise ConfigurationError, "base_url is not a valid URL: #{base_url.inspect} (#{e.message})"
+        end
+
+        unless uri.is_a?(URI::HTTP) && !uri.host.to_s.empty?
+          raise ConfigurationError, "base_url must be an absolute http(s) URL, got #{base_url.inspect}"
+        end
+
+        unless uri.userinfo.nil?
+          raise ConfigurationError, "base_url must not carry userinfo, got #{base_url.sub(uri.userinfo, '...').inspect}"
+        end
+
+        # endpoint_path is appended to base_url as a string. A query or a
+        # fragment would swallow it -- "https://host/p?x=1" + "/v1/systemone"
+        # posts to /p with the path buried in the query -- so reject both
+        # rather than build a URL that points somewhere else than it reads.
+        unless uri.query.nil? && uri.fragment.nil?
+          raise ConfigurationError,
+                "base_url must not carry a query or fragment, got #{base_url.inspect}"
+        end
+
+        return if uri.is_a?(URI::HTTPS) || LOOPBACK_HOSTS.include?(uri.host.downcase)
+
+        raise ConfigurationError,
+              "base_url must use https: over plain http the #{env_var} bearer token is sent in " \
+              "cleartext. Got #{base_url.inspect}. http is allowed only for #{LOOPBACK_HOSTS.join(', ')}."
       end
 
       # Nil or blank means the provider default. Known aliases resolve to the

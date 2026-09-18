@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `base_url` is now validated when the client is built: it must be an absolute
+  `https` URL with no userinfo, query, or fragment. Plain `http` is allowed only
+  for loopback hosts. Anything else raises `ConfigurationError` instead of
+  sending the API key in cleartext or to a host the URL does not name.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
