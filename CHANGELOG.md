@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The API key is no longer written out by `Marshal` or `YAML`. `inspect`
+  redacted it, but neither serializer asks `inspect` anything, so
+  `Marshal.dump(provider)` and `YAML.dump(provider)` — and `YAML.dump(client)`,
+  which walks to the provider — emitted it in plaintext. A restored provider
+  re-reads its environment variable instead.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.

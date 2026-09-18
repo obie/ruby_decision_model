@@ -167,6 +167,16 @@ that accepts `url:`, `headers:`, `body:` and returns
 return is still accepted and treated as having no headers, which means no
 `Retry-After` support and a nil `request_id`.
 
+## The API key
+
+`provider.inspect` redacts the key, and it is left out of `Marshal` and `YAML`
+entirely — a provider cached, queued as a job argument, or dumped into a crash
+report does not carry it. What comes back from either reads the key from the
+provider's environment variable, so a long-lived process keeps working and a
+dump file never held the secret in the first place. A restored provider whose
+key was passed explicitly and is not in the environment has none, and building
+a `Client` from it raises `ConfigurationError`.
+
 ## Errors
 
 | Error | Meaning |
