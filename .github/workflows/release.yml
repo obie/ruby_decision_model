@@ -86,7 +86,7 @@ jobs:
       # Exchanges the OIDC token for a short-lived RubyGems API key and writes
       # it where `gem push` looks. The gem must list this repo, this workflow
       # file, and the release environment as a trusted publisher on RubyGems.
-      - uses: rubygems/configure-rubygems-credentials@v1
+      - uses: rubygems/configure-rubygems-credentials@v2.1.0
         if: steps.check.outputs.publish == 'true'
 
       - name: Push to RubyGems
