@@ -201,3 +201,9 @@ anywhere. To ship a version:
 
 The same workflow can be started by hand from the Actions tab or with
 `gh workflow run release.yml`.
+
+Actions in both workflows are pinned to commit SHAs with the version they were
+in a trailing comment. The release job can ask GitHub for the OIDC token that
+RubyGems trades for a publishing key, so what runs in it should not be able to
+change under a tag that someone else controls. Bump a pin by replacing both the
+SHA and the comment.
