@@ -1,0 +1,94 @@
+name: Release
+
+# Publishes the gem when the version in lib/ruby_decision_model/version.rb is not yet on
+# RubyGems, using trusted publishing: GitHub hands RubyGems a short-lived OIDC
+# token and RubyGems hands back a short-lived API key. No stored secret, no API
+# key in the repo, and no MFA prompt.
+#
+# This workflow is the identity RubyGems trusts, so its FILENAME is part of the
+# trust configuration. Renaming this file breaks publishing until the gem's
+# trusted publisher is updated to match (docs: guides.rubygems.org/trusted-publishing).
+#
+# Two ways to release. Bump version.rb and land it on main, and the push
+# trigger below publishes it. Or run the workflow by hand. Either way a version
+# already on RubyGems is skipped before any credentials are fetched, so a
+# re-run, or a push that touched version.rb without changing the number, is
+# a no-op.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "lib/**/version.rb"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    # A GitHub environment lets you require a review before anything reaches
+    # RubyGems, and it is the second half of the trusted publisher's identity.
+    # The publisher registered on rubygems.org names this environment, so
+    # renaming it breaks publishing the same way renaming the file does.
+    environment: release
+
+    permissions:
+      contents: read
+      # The OIDC token this exchanges for a RubyGems API key. Publishing fails
+      # without it, and the failure looks like an ordinary auth error.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+          bundler-cache: true
+
+      # A release that cannot pass its own suite is not a release. CI already
+      # ran this on the commit; running it again here costs a minute and
+      # removes the "which commit did we actually build" question.
+      - name: Test suite
+        run: bundle exec rake test
+
+      # --strict escalates any gemspec warning to a build failure, and the
+      # build is what proves the gemspec's file list is what we think it is.
+      - name: Build the gem
+        run: bundle exec rake release:build
+
+      # The gem must carry every .rb file lib/ holds. A gemspec whose files
+      # list has drifted builds happily and installs broken, so the diff is
+      # asserted here rather than discovered by whoever runs gem install.
+      - name: Built gem carries its full file list
+        run: |
+          gem_file=$(ls pkg/*.gem)
+          dir=$(mktemp -d)
+          tar -xf "$gem_file" -C "$dir"
+          tar -tzf "$dir/data.tar.gz" | grep '\.rb$' | sort > "$dir/packaged.txt"
+          find lib -name '*.rb' | sort > "$dir/checkout.txt"
+          missing=$(comm -13 "$dir/packaged.txt" "$dir/checkout.txt")
+          if [ -n "$missing" ]; then
+            echo "::error::$(basename "$gem_file" .gem) is missing files that exist in lib:"
+            echo "$missing" | sed 's/^/    /'
+            exit 1
+          fi
+
+      # Decides whether there is anything to publish before touching
+      # credentials, so a no-op run never needs the trusted publisher at all.
+      - name: Is this version already on RubyGems?
+        id: check
+        run: |
+          status=$(bundle exec rake release:status)
+          echo "$status"
+          echo "$status" >> "$GITHUB_OUTPUT"
+
+      # Exchanges the OIDC token for a short-lived RubyGems API key and writes
+      # it where `gem push` looks. The gem must list this repo, this workflow
+      # file, and the release environment as a trusted publisher on RubyGems.
+      - uses: rubygems/configure-rubygems-credentials@v1
+        if: steps.check.outputs.publish == 'true'
+
+      - name: Push to RubyGems
+        if: steps.check.outputs.publish == 'true'
+        run: bundle exec rake release:push

@@ -186,3 +186,18 @@ return is still accepted and treated as having no headers, which means no
 Status: 0.1.0, API may change.
 
 The companion gem `decide` builds decisions and verdicts on top of this client.
+
+## Releasing
+
+Publishing runs through RubyGems trusted publishing, so no API key is stored
+anywhere. To ship a version:
+
+1. Bump `lib/ruby_decision_model/version.rb`.
+2. Add the version to `CHANGELOG.md`.
+3. Merge to `main`. The Release workflow runs the suite, builds the gem with
+   `gem build --strict`, checks the built gem carries every file under
+   `lib/`, and pushes it. A version already on RubyGems is skipped, so the
+   workflow is safe to re-run.
+
+The same workflow can be started by hand from the Actions tab or with
+`gh workflow run release.yml`.
