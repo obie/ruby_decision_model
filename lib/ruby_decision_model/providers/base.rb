@@ -95,6 +95,34 @@ module RubyDecisionModel
         "#<#{self.class.name} name=#{name.inspect} base_url=#{base_url.inspect} api_key=#{api_key? ? '[REDACTED]' : 'nil'}>"
       end
 
+      # inspect redacting the key is not enough: a provider written out by
+      # Marshal (a cache entry, a background-job argument) or by YAML (a
+      # config dump, a crash report) carried it in plaintext. Neither format
+      # asks inspect anything.
+      #
+      # So the key is not serialized at all. What comes back re-reads the
+      # environment, which is where a long-lived process should be getting it
+      # anyway; one whose key was passed explicitly comes back without it and
+      # raises ConfigurationError the next time a Client is built from it,
+      # which is a great deal better than a key in a dump file.
+      def marshal_dump
+        { base_url: @base_url }
+      end
+
+      def marshal_load(state)
+        @base_url = state[:base_url]
+        @api_key = ENV.fetch(env_var, nil)
+      end
+
+      def encode_with(coder)
+        coder.map = { "base_url" => @base_url }
+      end
+
+      def init_with(coder)
+        @base_url = coder.map["base_url"]
+        @api_key = ENV.fetch(env_var, nil)
+      end
+
       # Applies non-nil overrides in place. Used when a caller hands Client a
       # provider instance together with api_key: or base_url:.
       def configure(api_key: nil, base_url: nil)
