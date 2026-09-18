@@ -76,7 +76,7 @@ RubyDecisionModel::Client.new(
   api_key: nil,               # overrides the provider's env var
   model: nil,                 # nil means the provider default; see aliases below
   base_url: nil,              # overrides the provider base URL
-  timeout: 5,                 # open and read timeout in seconds
+  timeout: 5,                 # per-attempt timeout in seconds, nil for none
   retry: { max_retries: 2 },  # RetryPolicy or a Hash of overrides
   transport: nil              # see Transport
 )
@@ -147,9 +147,11 @@ Retry behaviour follows the official Typesafe SDKs and lives in
 | `retry_timeouts` | `true` | Retry open and read timeouts |
 | `total_timeout` | `30.0` | Budget in seconds across attempts and delays; `nil` disables |
 
-When the next delay would push past `total_timeout`, the client stops and
-raises the last error instead of sleeping. The budget governs whether another
-attempt starts; an attempt already in flight still runs to its own `timeout`.
+`total_timeout` is a deadline, not just a gate between attempts. Each attempt
+is given the smaller of `timeout` and what is left of the budget, so a single
+slow attempt cannot outlive the whole call. When the next delay would reach or
+pass the budget the client stops and raises the last error instead of sleeping,
+and an attempt that would start with nothing left raises `TimeoutError`.
 
 Invalid settings (a negative duration, a non-integer `max_retries`, a jitter
 outside 0..1, a NaN budget) raise `ConfigurationError` when the client is built.
@@ -161,17 +163,24 @@ RubyDecisionModel::Client.new(retry: RubyDecisionModel::RetryPolicy.new(max_retr
 
 ## Transport
 
-The client uses `Net::HTTP` by default. Inject `transport:` with any callable
-that accepts `url:`, `headers:`, `body:` and returns
-`[status, body_string, headers_hash]`. A two-element `[status, body_string]`
-return is still accepted and treated as having no headers, which means no
-`Retry-After` support and a nil `request_id`.
+The client uses `Net::HTTP` by default, with `timeout` applied to all four of
+its phases: connect, TLS handshake, write, and read.
+
+Inject `transport:` with any callable that accepts `url:`, `headers:`, `body:`
+and returns `[status, body_string, headers_hash]`. A two-element
+`[status, body_string]` return is still accepted and treated as having no
+headers, which means no `Retry-After` support and a nil `request_id`.
+
+A transport that also declares a `timeout:` keyword (or `**`) is handed the
+number of seconds this attempt may take, already clamped to what is left of
+`total_timeout`. Transports that do not declare it are called exactly as
+before.
 
 ## Errors
 
 | Error | Meaning |
 | --- | --- |
-| `ConfigurationError` | No provider could be resolved, missing api_key, unknown provider, or bad `retry:` value |
+| `ConfigurationError` | No provider could be resolved, missing api_key, unknown provider, or bad `timeout:` or `retry:` value |
 | `RequestError` | Questions hash was empty |
 | `TransportError` (`TimeoutError`) | Network or timeout failure after retries, carries `#cause_error` |
 | `ApiError` | Non-2xx response, carries `#status`, `#body`, and `#headers` |
