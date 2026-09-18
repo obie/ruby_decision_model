@@ -118,6 +118,22 @@ Questions.choice("Which team?", criteria: { "billing" => "...", "auth" => "..." 
 Questions.score("How severe?", criteria: ["cosmetic", "minor", "major"])            # 2 to 10 levels
 ```
 
+A noul takes optional `criteria` describing what a yes and a no mean. The keys
+are `true` and `false` — Ruby's booleans or the strings — and anything else
+raises `ArgumentError`:
+
+```ruby
+Questions.noul(
+  "Has the customer contacted support about this before?",
+  criteria: { true => "Mentions a prior attempt or ticket", false => "No sign of previous contact" }
+)
+```
+
+Every description — a noul outcome, a choice option, a score level — is text,
+a Hash, an Array, or `nil` for undescribed. Choice labels are stringified for
+the wire, and two that stringify the same (`:billing` and `"billing"`) raise
+rather than silently becoming one option with the second description.
+
 Answers come back typed: `Answers::Noul` (`noul`, `probabilities`),
 `Answers::Choice` (`choice`, `confidence`, `probabilities`), and
 `Answers::Score` (`score`, `confidence`, `probabilities`, `legend`).

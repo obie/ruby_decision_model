@@ -57,6 +57,88 @@ class QuestionsTest < Minitest::Test
     assert_equal 255, question["criteria"].length
   end
 
+  # --- criteria contents, not just their container ---
+
+  def test_noul_accepts_true_and_false_descriptions
+    question = RubyDecisionModel::Questions.noul(
+      "Has the customer contacted support before?",
+      criteria: { true => "Mentions a prior ticket", false => "No sign of previous contact" }
+    )
+
+    assert_equal({ "true" => "Mentions a prior ticket", "false" => "No sign of previous contact" },
+                 question["criteria"])
+  end
+
+  def test_noul_accepts_string_keys_too
+    question = RubyDecisionModel::Questions.noul("Urgent?", criteria: { "true" => "yes means", "false" => nil })
+    assert_equal({ "true" => "yes means", "false" => nil }, question["criteria"])
+  end
+
+  def test_noul_accepts_one_sided_criteria
+    question = RubyDecisionModel::Questions.noul("Urgent?", criteria: { true => "time-sensitive" })
+    assert_equal({ "true" => "time-sensitive" }, question["criteria"])
+  end
+
+  def test_noul_rejects_criteria_that_are_not_a_hash
+    error = assert_raises(ArgumentError) { RubyDecisionModel::Questions.noul("Urgent?", criteria: %w[yes no]) }
+    assert_match(/must be a Hash/, error.message)
+  end
+
+  def test_noul_rejects_keys_that_are_not_true_or_false
+    error = assert_raises(ArgumentError) do
+      RubyDecisionModel::Questions.noul("Urgent?", criteria: { "yes" => "means urgent" })
+    end
+    assert_match(/must be true and false/, error.message)
+  end
+
+  def test_noul_rejects_a_duplicate_outcome
+    assert_raises(ArgumentError) do
+      RubyDecisionModel::Questions.noul("Urgent?", criteria: { true => "a", "true" => "b" })
+    end
+  end
+
+  def test_noul_rejects_a_description_that_is_not_text_or_structure
+    assert_raises(ArgumentError) { RubyDecisionModel::Questions.noul("Urgent?", criteria: { true => 1 }) }
+  end
+
+  def test_noul_without_criteria_is_unchanged
+    refute RubyDecisionModel::Questions.noul("Urgent?").key?("criteria")
+  end
+
+  def test_choice_rejects_labels_that_collide_once_stringified
+    # Both become "billing" as a JSON key, so one option would silently
+    # replace the other and the model would see a rubric nobody wrote.
+    error = assert_raises(ArgumentError) do
+      RubyDecisionModel::Questions.choice("Which team?", criteria: { :billing => "a", "billing" => "b" })
+    end
+    assert_match(/collide/, error.message)
+  end
+
+  def test_choice_rejects_a_blank_label
+    assert_raises(ArgumentError) { RubyDecisionModel::Questions.choice("Which?", criteria: { "  " => "a" }) }
+  end
+
+  def test_choice_rejects_a_description_that_is_not_text_or_structure
+    assert_raises(ArgumentError) { RubyDecisionModel::Questions.choice("Which?", criteria: { "a" => 3 }) }
+  end
+
+  def test_choice_accepts_structured_descriptions
+    criteria = { "billing" => { "covers" => %w[refunds invoices] }, "auth" => nil }
+    question = RubyDecisionModel::Questions.choice("Which team?", criteria: criteria)
+
+    assert_equal criteria, question["criteria"]
+  end
+
+  def test_score_rejects_a_level_that_is_not_text_or_structure
+    error = assert_raises(ArgumentError) { RubyDecisionModel::Questions.score("How bad?", criteria: ["low", 2]) }
+    assert_match(/criteria\[1\]/, error.message)
+  end
+
+  def test_score_accepts_structured_levels
+    criteria = [{ "label" => "calm" }, nil, "very angry"]
+    assert_equal criteria, RubyDecisionModel::Questions.score("How frustrated?", criteria: criteria)["criteria"]
+  end
+
   def test_score_rejects_too_many_levels
     assert_raises(ArgumentError) { RubyDecisionModel::Questions.score("Rate severity", criteria: (1..11).map(&:to_s)) }
   end
