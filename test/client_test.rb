@@ -34,8 +34,10 @@ class ClientTest < Minitest::Test
   # --- configuration ---
 
   def test_requires_api_key
-    assert_raises(RubyDecisionModel::ConfigurationError) do
-      RubyDecisionModel::Client.new(api_key: nil)
+    without_provider_env do
+      assert_raises(RubyDecisionModel::ConfigurationError) do
+        RubyDecisionModel::Client.new(api_key: nil)
+      end
     end
   end
 
@@ -50,6 +52,14 @@ class ClientTest < Minitest::Test
     assert_raises(RubyDecisionModel::RequestError) do
       client.ask(state: {}, questions: {})
     end
+  end
+
+  def test_legacy_constants_remain_available
+    assert_equal "https://openrouter.ai/api/alpha", RubyDecisionModel::Client::DEFAULT_BASE_URL
+    assert_equal "typesafe/jev-1.13", RubyDecisionModel::Client::DEFAULT_MODEL
+    assert_equal 3, RubyDecisionModel::Client::MAX_ATTEMPTS
+    assert_includes RubyDecisionModel::Client::RETRYABLE_STATUSES, 503
+    assert_includes RubyDecisionModel::Client::RETRYABLE_EXCEPTIONS, Net::ReadTimeout
   end
 
   # --- happy path ---
@@ -100,12 +110,12 @@ class ClientTest < Minitest::Test
     assert_equal 413, error.status
   end
 
-  def test_429_retries_then_raises_rate_limited
-    transport = FakeTransport.new([[429, "{}"], [429, "{}"]])
+  def test_429_retries_twice_then_raises_rate_limited
+    transport = FakeTransport.new([[429, "{}"], [429, "{}"], [429, "{}"]])
     client = build_client(transport)
     error = assert_raises(RubyDecisionModel::RateLimited) { client.ask(state: {}, questions: questions) }
     assert_equal 429, error.status
-    assert_equal 2, transport.calls.length
+    assert_equal 3, transport.calls.length
   end
 
   def test_500_raises_api_error
@@ -143,15 +153,27 @@ class ClientTest < Minitest::Test
     assert_equal "bug", response["category"].choice
   end
 
-  def test_exception_then_retryable_status_raises_after_two_attempts
-    transport = FakeTransport.new([Net::ReadTimeout.new, [503, "{}"]])
+  def test_exception_then_retryable_status_raises_after_three_attempts
+    transport = FakeTransport.new([Net::ReadTimeout.new, [503, "{}"], [503, "{}"]])
     client = build_client(transport)
 
     assert_raises(RubyDecisionModel::ApiError) { client.ask(state: {}, questions: questions) }
-    assert_equal 2, transport.calls.length
+    assert_equal 3, transport.calls.length
   end
 
   # --- malformed / invalid responses ---
+
+  def test_nil_body_on_success_raises_invalid_response
+    transport = FakeTransport.new([[200, nil]])
+    client = build_client(transport)
+    assert_raises(RubyDecisionModel::InvalidResponse) { client.ask(state: {}, questions: questions) }
+  end
+
+  def test_empty_body_on_success_raises_invalid_response
+    transport = FakeTransport.new([[204, ""]])
+    client = build_client(transport)
+    assert_raises(RubyDecisionModel::InvalidResponse) { client.ask(state: {}, questions: questions) }
+  end
 
   def test_non_json_body_raises_invalid_response
     transport = FakeTransport.new([[200, "not json"]])
@@ -194,6 +216,101 @@ class ClientTest < Minitest::Test
 
     error = assert_raises(RubyDecisionModel::InvalidResponse) { client.ask(state: {}, questions: questions) }
     refute_kind_of RubyDecisionModel::MissingAnswers, error
+  end
+
+  def test_json_body_that_is_not_an_object_raises_invalid_response
+    transport = FakeTransport.new([[200, "[]"]])
+    client = build_client(transport)
+    assert_raises(RubyDecisionModel::InvalidResponse) { client.ask(state: {}, questions: questions) }
+  end
+
+  def test_missing_answers_key_raises_missing_answers_for_all_questions
+    body = JSON.generate("id" => "resp_5", "model" => "typesafe/jev-1.13")
+    transport = FakeTransport.new([[200, body]])
+    client = build_client(transport)
+
+    error = assert_raises(RubyDecisionModel::MissingAnswers) { client.ask(state: {}, questions: questions) }
+    assert_equal %w[category severity urgent], error.missing.sort
+  end
+
+  def test_malformed_takes_priority_over_missing_when_both_present
+    body = JSON.generate(
+      "id" => "resp_6",
+      "model" => "typesafe/jev-1.13",
+      "answers" => {
+        "urgent" => { "type" => "noul", "noul" => "not-a-number" }
+      },
+      "usage" => {}
+    )
+    transport = FakeTransport.new([[200, body]])
+    client = build_client(transport)
+
+    error = assert_raises(RubyDecisionModel::InvalidResponse) { client.ask(state: {}, questions: questions) }
+    refute_kind_of RubyDecisionModel::MissingAnswers, error
+    assert_includes error.message, "urgent"
+  end
+
+  def test_malformed_choice_missing_confidence_raises_invalid_response
+    body = JSON.generate(
+      "id" => "resp_7",
+      "model" => "typesafe/jev-1.13",
+      "answers" => { "category" => { "type" => "choice", "choice" => "bug" } },
+      "usage" => {}
+    )
+    transport = FakeTransport.new([[200, body]])
+    client = build_client(transport)
+
+    error = assert_raises(RubyDecisionModel::InvalidResponse) do
+      client.ask(state: {}, questions: { "category" => questions["category"] })
+    end
+    assert_includes error.message, "category"
+  end
+
+  def test_malformed_score_missing_confidence_raises_invalid_response
+    body = JSON.generate(
+      "id" => "resp_8",
+      "model" => "typesafe/jev-1.13",
+      "answers" => { "severity" => { "type" => "score", "score" => 1.4 } },
+      "usage" => {}
+    )
+    transport = FakeTransport.new([[200, body]])
+    client = build_client(transport)
+
+    error = assert_raises(RubyDecisionModel::InvalidResponse) do
+      client.ask(state: {}, questions: { "severity" => questions["severity"] })
+    end
+    assert_includes error.message, "severity"
+  end
+
+  def test_unsupported_question_type_raises_invalid_response
+    weird_questions = { "mystery" => { "type" => "unknown", "instructions" => "huh" } }
+    body = JSON.generate(
+      "id" => "resp_9",
+      "model" => "typesafe/jev-1.13",
+      "answers" => { "mystery" => { "type" => "unknown", "value" => "x" } },
+      "usage" => {}
+    )
+    transport = FakeTransport.new([[200, body]])
+    client = build_client(transport)
+
+    error = assert_raises(RubyDecisionModel::InvalidResponse) do
+      client.ask(state: {}, questions: weird_questions)
+    end
+    assert_includes error.message, "mystery"
+  end
+
+  def test_non_hash_probabilities_fall_back_to_empty_hash
+    body = JSON.generate(
+      "id" => "resp_10",
+      "model" => "typesafe/jev-1.13",
+      "answers" => { "urgent" => { "type" => "noul", "noul" => 0.5, "probabilities" => %w[not a hash] } },
+      "usage" => {}
+    )
+    transport = FakeTransport.new([[200, body]])
+    client = build_client(transport)
+
+    response = client.ask(state: {}, questions: { "urgent" => questions["urgent"] })
+    assert_equal({}, response["urgent"].probabilities)
   end
 
   def test_junk_usage_fields_become_nil

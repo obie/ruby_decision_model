@@ -46,6 +46,17 @@ class QuestionsTest < Minitest::Test
     assert_raises(ArgumentError) { RubyDecisionModel::Questions.score("Rate severity", criteria: ["only one"]) }
   end
 
+  def test_score_accepts_ten_levels
+    question = RubyDecisionModel::Questions.score("Rate severity", criteria: (1..10).map(&:to_s))
+    assert_equal 10, question["criteria"].length
+  end
+
+  def test_choice_accepts_255_options
+    criteria = (1..255).each_with_object({}) { |i, h| h[i.to_s] = nil }
+    question = RubyDecisionModel::Questions.choice("Pick one", criteria: criteria)
+    assert_equal 255, question["criteria"].length
+  end
+
   def test_score_rejects_too_many_levels
     assert_raises(ArgumentError) { RubyDecisionModel::Questions.score("Rate severity", criteria: (1..11).map(&:to_s)) }
   end

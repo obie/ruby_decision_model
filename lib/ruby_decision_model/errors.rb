@@ -19,12 +19,13 @@ module RubyDecisionModel
   class TimeoutError < TransportError; end
 
   class ApiError < Error
-    attr_reader :status, :body
+    attr_reader :status, :body, :headers
 
-    def initialize(message, status:, body:)
+    def initialize(message, status:, body:, headers: {})
       super(message)
       @status = status
       @body = body
+      @headers = headers || {}
     end
   end
 
@@ -32,7 +33,11 @@ module RubyDecisionModel
 
   class PayloadTooLarge < ApiError; end
 
+  class UnprocessableEntity < ApiError; end
+
   class RateLimited < ApiError; end
+
+  class Overloaded < ApiError; end
 
   class InvalidResponse < Error
     attr_reader :answers
