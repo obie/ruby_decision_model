@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `ask` takes `extra:` for top-level request fields beyond `model`, `state`,
+  and `questions`. The body was hard-coded to those three, so OpenRouter's
+  documented `provider`, `session_id`, `trace`, and `user` could not be sent
+  at all; the official JavaScript SDK forwards any unknown top-level field and
+  Python has `extra_body`. `model`, `state`, and `questions` cannot be
+  overridden this way.
+- `Providers::Base#request_body` takes `extra:`. A provider overriding it
+  without that keyword keeps working, and raises `ConfigurationError` if
+  extra fields are actually passed rather than silently dropping them.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.

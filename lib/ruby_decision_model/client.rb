@@ -53,10 +53,12 @@ module RubyDecisionModel
       @provider.base_url
     end
 
-    def ask(state:, questions:)
+    # extra: top-level request fields the provider documents beyond model,
+    #        state, and questions.
+    def ask(state:, questions:, extra: {})
       raise RequestError, "questions must not be empty" if questions.nil? || questions.empty?
 
-      body = @provider.request_body(model: @model, state: state, questions: questions)
+      body = build_request_body(state: state, questions: questions, extra: extra)
       status, response_body, response_headers = perform_with_retry(
         url: @provider.url, headers: @provider.headers, body: body
       )
@@ -64,6 +66,26 @@ module RubyDecisionModel
     end
 
     private
+
+    # request_body is a documented override point, so a provider written
+    # against the old three-keyword signature keeps working. It just cannot
+    # be handed extra fields, and says so rather than dropping them.
+    def build_request_body(state:, questions:, extra:)
+      return @provider.request_body(model: @model, state: state, questions: questions) if extra.nil? || extra.empty?
+
+      unless provider_accepts_extra?
+        raise ConfigurationError,
+              "#{@provider.name} defines request_body without an extra: keyword, so it cannot send extra fields"
+      end
+
+      @provider.request_body(model: @model, state: state, questions: questions, extra: extra)
+    end
+
+    def provider_accepts_extra?
+      @provider.method(:request_body).parameters.any? do |kind, name|
+        kind == :keyrest || (%i[key keyreq].include?(kind) && name == :extra)
+      end
+    end
 
     def resolve_provider(provider, api_key:, base_url:)
       case provider

@@ -76,8 +76,34 @@ module RubyDecisionModel
         }
       end
 
-      def request_body(model:, state:, questions:)
-        JSON.generate({ "model" => model, "state" => state, "questions" => questions })
+      # extra: top-level request fields beyond the three the API requires.
+      # OpenRouter documents provider, session_id, trace, and user on a
+      # decisions request, and the official JS SDK forwards any unknown
+      # top-level field, so there has to be a way to send one. The three
+      # required fields are not overridable: they come from a validated
+      # client, and a request whose questions do not match the ones the
+      # answers are matched against is not a request worth making.
+      RESERVED_BODY_FIELDS = %w[model state questions].freeze
+
+      def request_body(model:, state:, questions:, extra: {})
+        body = { "model" => model, "state" => state, "questions" => questions }
+        JSON.generate(body.merge(stringify_extra(extra)))
+      end
+
+      def stringify_extra(extra)
+        return {} if extra.nil? || extra.empty?
+
+        raise RequestError, "extra must be a Hash of request fields, got #{extra.class}" unless extra.is_a?(Hash)
+
+        extra.each_with_object({}) do |(key, value), fields|
+          name = key.to_s
+          if RESERVED_BODY_FIELDS.include?(name)
+            raise RequestError, "extra must not set #{name}; pass it as its own argument"
+          end
+          raise RequestError, "extra has #{name.inspect} twice" if fields.key?(name)
+
+          fields[name] = value
+        end
       end
 
       def usage(parsed)

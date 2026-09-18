@@ -106,7 +106,8 @@ is whatever the provider returned.
 Subclass `RubyDecisionModel::Providers::Base` and define `name`, `env_var`,
 `default_base_url`, `endpoint_path`, `default_model`, and optionally `aliases`
 and `reports_cost?`. Override `headers`, `request_body`, or `usage` when the
-wire format differs. Pass an instance as `provider:`.
+wire format differs; a `request_body` override should take `extra:` if callers
+are to pass extra fields through it. Pass an instance as `provider:`.
 
 ## Questions and answers
 
@@ -123,6 +124,23 @@ Answers come back typed: `Answers::Noul` (`noul`, `probabilities`),
 `Answers::Score` (`score`, `confidence`, `probabilities`, `legend`).
 `response.nouls`, `response.choices`, and `response.scores` return the answers
 of one type keyed the same way as `response.answers`.
+
+### Extra request fields
+
+`ask` takes `extra:` for top-level request fields beyond `model`, `state`, and
+`questions`. OpenRouter documents `provider`, `session_id`, `trace`, and `user`
+on a decisions request:
+
+```ruby
+client.ask(state: state, questions: questions,
+           extra: { session_id: conversation_id, user: user_id })
+```
+
+`model`, `state`, and `questions` cannot be set this way; they come from the
+client and from the arguments that the answers are matched against, and
+`RequestError` says so. A provider that overrides `request_body` without an
+`extra:` keyword raises `ConfigurationError` when extra fields are passed,
+rather than dropping them.
 
 Score `probabilities` and `legend` are keyed by the wire's string level keys
 (`"0"`, `"1"`, ...), not by the criteria labels. Choice `probabilities` sum to
