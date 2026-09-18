@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `Client.new` takes `headers:`, and `ask` takes `model:` and `headers:` for a
+  single call. There was no way to send an extra header at all, which ruled
+  out OpenRouter's `HTTP-Referer`/`X-Title` attribution and any tracing header,
+  and no way to use a second model without building a second client. Headers
+  merge provider, then client, then call, matched case-insensitively.
+- Header names and values are validated. A newline in either used to surface as
+  an `ArgumentError` from inside `Net::HTTP` on the first request; it now
+  raises `ConfigurationError` naming the header.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.

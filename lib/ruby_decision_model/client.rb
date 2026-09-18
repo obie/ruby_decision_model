@@ -17,7 +17,7 @@ module RubyDecisionModel
     RETRYABLE_STATUSES = RetryPolicy::DEFAULT_STATUSES
     RETRYABLE_EXCEPTIONS = (RetryPolicy::TIMEOUT_EXCEPTIONS + RetryPolicy::CONNECTION_EXCEPTIONS).freeze
 
-    attr_reader :provider, :model, :retry_policy, :timeout
+    attr_reader :provider, :model, :retry_policy, :timeout, :headers
 
     # provider:  :open_router, :typesafe, or a Providers::Base instance. When
     #            nil, api_key: alone selects OpenRouter; otherwise the
@@ -32,7 +32,7 @@ module RubyDecisionModel
     # random:    callable returning a Float in 0...1, used for backoff jitter.
     # clock:     callable returning monotonic seconds, used for total_timeout.
     def initialize(provider: nil, api_key: nil, model: nil, base_url: nil, timeout: 5,
-                   transport: nil, sleeper: ->(seconds) { sleep(seconds) }, retry: {},
+                   transport: nil, sleeper: ->(seconds) { sleep(seconds) }, retry: {}, headers: {},
                    random: -> { rand }, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
       @provider = resolve_provider(provider, api_key: api_key, base_url: base_url)
       unless @provider.api_key?
@@ -41,6 +41,7 @@ module RubyDecisionModel
       end
 
       @model = @provider.resolve_model(model)
+      @headers = validate_headers(headers)
       @timeout = timeout
       @transport = transport || default_transport
       @sleeper = sleeper
@@ -53,17 +54,56 @@ module RubyDecisionModel
       @provider.base_url
     end
 
-    def ask(state:, questions:)
+    # model:   overrides the client's model for this call, aliases and all.
+    # headers: merged over the client's headers for this call.
+    def ask(state:, questions:, model: nil, headers: {})
       raise RequestError, "questions must not be empty" if questions.nil? || questions.empty?
 
-      body = @provider.request_body(model: @model, state: state, questions: questions)
+      body = @provider.request_body(
+        model: model.nil? ? @model : @provider.resolve_model(model), state: state, questions: questions
+      )
       status, response_body, response_headers = perform_with_retry(
-        url: @provider.url, headers: @provider.headers, body: body
+        url: @provider.url, headers: request_headers(headers), body: body
       )
       handle_response(status, response_body, response_headers, questions)
     end
 
     private
+
+    # The provider's headers, then the client's, then this call's. Later wins,
+    # matched without regard to case so "content-type" replaces "Content-Type"
+    # rather than being sent alongside it.
+    def request_headers(per_call)
+      merged = @provider.headers.dup
+      [@headers, validate_headers(per_call)].each do |overrides|
+        overrides.each do |name, value|
+          merged.delete_if { |existing, _| existing.to_s.casecmp?(name.to_s) }
+          merged[name.to_s] = value
+        end
+      end
+      merged
+    end
+
+    # A CR or LF in a header is rejected by Net::HTTP with an ArgumentError
+    # from somewhere deep in the request, long after the value was set. Say
+    # so here, where the caller can see which header it was.
+    def validate_headers(headers)
+      return {} if headers.nil?
+
+      unless headers.is_a?(Hash)
+        raise ConfigurationError, "headers must be a Hash of name => value, got #{headers.class}"
+      end
+
+      headers.each do |name, value|
+        if name.to_s.strip.empty? || name.to_s.match?(/[\r\n:]/)
+          raise ConfigurationError, "header name #{name.inspect} is blank or contains a separator"
+        end
+
+        raise ConfigurationError, "header #{name} contains a newline" if value.to_s.match?(/[\r\n]/)
+      end
+
+      headers
+    end
 
     def resolve_provider(provider, api_key:, base_url:)
       case provider
