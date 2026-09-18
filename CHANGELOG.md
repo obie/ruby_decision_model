@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- `Questions.noul` validates `criteria`, which it previously passed through
+  untouched while `choice` and `score` validated theirs. It must be a Hash
+  keyed by `true`/`false` (booleans or the strings, normalized to strings),
+  and anything else raises `ArgumentError` at the call site instead of a 422
+  from the API.
+- `Questions.choice` raises when two labels stringify to the same key rather
+  than silently collapsing them into one option with the later description.
+  Blank labels are rejected.
+- Descriptions in all three builders must be a String, Hash, Array, or nil,
+  matching the `EntryType` the official SDKs accept.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
