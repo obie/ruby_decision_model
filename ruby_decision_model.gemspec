@@ -19,8 +19,16 @@ Gem::Specification.new do |spec|
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2"
 
+  # homepage_uri is left out on purpose: it would duplicate source_code_uri,
+  # and `gem build --strict` in the release workflow fails on that warning.
   spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
+  spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
+  spec.metadata["documentation_uri"] = "#{spec.homepage}/blob/main/README.md"
+  # Releases go through trusted publishing, which needs no stored key. This
+  # closes the other door: a push with someone's RubyGems credentials, from a
+  # laptop or a leaked token, is refused without a second factor.
+  spec.metadata["rubygems_mfa_required"] = "true"
 
   spec.files = Dir["lib/**/*.rb"] + %w[README.md CHANGELOG.md LICENSE.txt]
   spec.require_paths = ["lib"]

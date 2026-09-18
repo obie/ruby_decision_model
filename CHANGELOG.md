@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The gemspec sets `rubygems_mfa_required`, so a push with someone's RubyGems
+  credentials is refused without a second factor. Releases already go through
+  trusted publishing, which needs no stored key; this closes the other door.
+- Added `bug_tracker_uri` and `documentation_uri` to the gemspec metadata, so
+  the RubyGems page links to the issue tracker and the README.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
