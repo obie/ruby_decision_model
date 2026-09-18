@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # .ruby-version is the Ruby releases are built with. The numbered
+        # entries cover the range the gemspec claims to support.
+        ruby: [".ruby-version", "3.2", "3.3", "3.4"]
+
+    name: Ruby ${{ matrix.ruby }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Test suite
+        run: bundle exec rake
