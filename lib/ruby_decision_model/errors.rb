@@ -39,6 +39,18 @@ module RubyDecisionModel
 
   class Overloaded < ApiError; end
 
+  # The response was larger than max_response_bytes. Carries how far the
+  # client got before it gave up, and the limit it was measured against.
+  class ResponseTooLarge < Error
+    attr_reader :bytes, :limit
+
+    def initialize(message, bytes: nil, limit: nil)
+      super(message)
+      @bytes = bytes
+      @limit = limit
+    end
+  end
+
   class InvalidResponse < Error
     attr_reader :answers
 

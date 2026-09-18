@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Added `max_response_bytes` (10 MiB by default, `nil` to disable) and the
+  `ResponseTooLarge` error. Response bodies had no ceiling: the default
+  transport buffered whatever the endpoint sent before anything could look at
+  it, and an error body was then retained on the exception. The default
+  transport now rejects an oversized `Content-Length` before reading and
+  otherwise stops mid-stream; bodies from custom transports are measured
+  before they reach the parser.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.

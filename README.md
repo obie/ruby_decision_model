@@ -78,6 +78,7 @@ RubyDecisionModel::Client.new(
   base_url: nil,              # overrides the provider base URL
   timeout: 5,                 # open and read timeout in seconds
   retry: { max_retries: 2 },  # RetryPolicy or a Hash of overrides
+  max_response_bytes: 10485760, # ceiling on a response body; nil disables
   transport: nil              # see Transport
 )
 
@@ -167,6 +168,16 @@ that accepts `url:`, `headers:`, `body:` and returns
 return is still accepted and treated as having no headers, which means no
 `Retry-After` support and a nil `request_id`.
 
+## Response size
+
+A response body is read into memory before it can be parsed, so the client caps
+it at `max_response_bytes`, 10 MiB by default. The default transport checks
+`Content-Length` first and otherwise stops mid-stream once the ceiling is
+passed, so an endpoint offering an endless body never gets to fill the process.
+A body returned by a custom transport is measured too, before it reaches the
+JSON parser or an `ApiError`. Over the limit raises `ResponseTooLarge`, which
+is never retried. `nil` disables the check.
+
 ## Errors
 
 | Error | Meaning |
@@ -180,6 +191,7 @@ return is still accepted and treated as having no headers, which means no
 | `UnprocessableEntity` | 422 (never retried) |
 | `RateLimited` | 429 (retried) |
 | `Overloaded` | 529 (retried) |
+| `ResponseTooLarge` | Response body passed `max_response_bytes`, carries `#bytes` and `#limit` |
 | `InvalidResponse` | Body wasn't JSON, wasn't a Hash, or an answer was malformed |
 | `MissingAnswers` | One or more question ids came back missing or wrong-typed, carries `#missing` |
 
