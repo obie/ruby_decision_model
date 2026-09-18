@@ -21,7 +21,10 @@ module RubyDecisionModel
   )
     DEFAULT_STATUSES = ([408, 429] + (500..599).to_a).freeze
 
-    TIMEOUT_EXCEPTIONS = [Net::OpenTimeout, Net::ReadTimeout].freeze
+    # Net::WriteTimeout fires when the request body stalls on the way out.
+    # It is as much a timeout as the other two, and leaving it off this list
+    # made it a plain TransportError that was never retried.
+    TIMEOUT_EXCEPTIONS = [Net::OpenTimeout, Net::ReadTimeout, Net::WriteTimeout].freeze
     CONNECTION_EXCEPTIONS = [
       Errno::ECONNRESET,
       Errno::ECONNREFUSED,

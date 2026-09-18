@@ -41,7 +41,7 @@ module RubyDecisionModel
       end
 
       @model = @provider.resolve_model(model)
-      @timeout = timeout
+      @timeout = validate_timeout(timeout)
       @transport = transport || default_transport
       @sleeper = sleeper
       @retry_policy = RetryPolicy.from(binding.local_variable_get(:retry))
@@ -89,12 +89,18 @@ module RubyDecisionModel
     end
 
     def default_transport
-      lambda do |url:, headers:, body:|
+      lambda do |url:, headers:, body:, timeout: @timeout|
         uri = URI.parse(url)
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = uri.scheme == "https"
-        http.open_timeout = @timeout
-        http.read_timeout = @timeout
+        # All four, not just open and read: a stalled TLS handshake or a
+        # stalled upload otherwise falls back to Net::HTTP's own defaults
+        # (60s for the write), which blows through both `timeout` and the
+        # retry policy's total budget.
+        http.open_timeout = timeout
+        http.ssl_timeout = timeout
+        http.read_timeout = timeout
+        http.write_timeout = timeout
 
         request = Net::HTTP::Post.new(uri.request_uri)
         headers.each { |k, v| request[k] = v }
@@ -102,6 +108,34 @@ module RubyDecisionModel
 
         response = http.request(request)
         [response.code.to_i, response.body, response.each_header.to_h]
+      end
+    end
+
+    def validate_timeout(timeout)
+      return timeout if timeout.nil?
+      return timeout if timeout.is_a?(Numeric) && timeout.finite? && timeout.positive?
+
+      raise ConfigurationError, "timeout must be nil or a finite positive number, got #{timeout.inspect}"
+    end
+
+    # The transport contract grew a `timeout:` keyword so the client can hand
+    # each attempt what is left of the retry budget. Transports written
+    # against the old three-keyword contract still work: they are called the
+    # way they always were.
+    def transport_accepts_timeout?
+      return @transport_accepts_timeout unless @transport_accepts_timeout.nil?
+
+      parameters = @transport.respond_to?(:parameters) ? @transport.parameters : @transport.method(:call).parameters
+      @transport_accepts_timeout = parameters.any? do |kind, name|
+        kind == :keyrest || (%i[key keyreq].include?(kind) && name == :timeout)
+      end
+    end
+
+    def call_transport(url:, headers:, body:, timeout:)
+      if transport_accepts_timeout?
+        @transport.call(url: url, headers: headers, body: body, timeout: timeout)
+      else
+        @transport.call(url: url, headers: headers, body: body)
       end
     end
 
@@ -113,7 +147,8 @@ module RubyDecisionModel
       loop do
         begin
           status, response_body, response_headers = normalize_transport_result(
-            @transport.call(url: url, headers: headers, body: body)
+            call_transport(url: url, headers: headers, body: body,
+                           timeout: attempt_timeout(policy, started_at))
           )
         rescue Error
           raise
@@ -146,7 +181,32 @@ module RubyDecisionModel
     def budget_exceeded?(policy, started_at, delay)
       return false if policy.total_timeout.nil?
 
-      (@clock.call - started_at) + delay > policy.total_timeout
+      # >=, not >: a delay that lands exactly on the deadline has used the
+      # whole budget, and the attempt after it would start with nothing left.
+      (@clock.call - started_at) + delay >= policy.total_timeout
+    end
+
+    # What is left of the budget, or nil when there is no budget. Handed to
+    # the transport so a single attempt cannot outlive the whole call: with
+    # `timeout: 5` and 2s of budget left, the attempt gets 2s.
+    def remaining_budget(policy, started_at)
+      return nil if policy.total_timeout.nil?
+
+      policy.total_timeout - (@clock.call - started_at)
+    end
+
+    def attempt_timeout(policy, started_at)
+      remaining = remaining_budget(policy, started_at)
+      return @timeout if remaining.nil?
+
+      if remaining <= 0
+        raise TimeoutError.new(
+          "request budget of #{policy.total_timeout}s was exhausted before the attempt started",
+          cause_error: nil
+        )
+      end
+
+      @timeout.nil? ? remaining : [@timeout, remaining].min
     end
 
     def normalize_transport_result(result)

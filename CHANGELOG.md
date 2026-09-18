@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- `timeout` now covers every phase of the default transport, not only connect
+  and read. A stalled TLS handshake or a stalled upload used to fall back to
+  `Net::HTTP`'s own 60-second write timeout, well past both `timeout` and
+  `total_timeout`.
+- `Net::WriteTimeout` is classified as a timeout, so `retry_timeouts` governs
+  it like the other two instead of it surfacing as an unretried
+  `TransportError`.
+- `total_timeout` is enforced as a deadline. Each attempt is given the smaller
+  of `timeout` and the remaining budget, an attempt that would start with no
+  budget left raises `TimeoutError`, and a delay landing exactly on the
+  deadline now stops the retry loop rather than allowing one more attempt.
+- The transport contract accepts an optional `timeout:` keyword carrying that
+  per-attempt budget. Transports that do not declare it are called unchanged.
+- `timeout:` is validated when the client is built: nil, or a finite positive
+  number. Anything else raises `ConfigurationError`.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
