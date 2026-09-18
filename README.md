@@ -174,7 +174,7 @@ return is still accepted and treated as having no headers, which means no
 | `ConfigurationError` | No provider could be resolved, missing api_key, unknown provider, or bad `retry:` value |
 | `RequestError` | Questions hash was empty |
 | `TransportError` (`TimeoutError`) | Network or timeout failure after retries, carries `#cause_error` |
-| `ApiError` | Non-2xx response, carries `#status`, `#body`, and `#headers` |
+| `ApiError` | Non-2xx response, carries `#status`, `#body`, `#headers`, `#detail`, `#error_code`, and `#parsed_body` |
 | `Unauthorized` | 401 |
 | `PayloadTooLarge` | 413 |
 | `UnprocessableEntity` | 422 (never retried) |
@@ -182,6 +182,14 @@ return is still accepted and treated as having no headers, which means no
 | `Overloaded` | 529 (retried) |
 | `InvalidResponse` | Body wasn't JSON, wasn't a Hash, or an answer was malformed |
 | `MissingAnswers` | One or more question ids came back missing or wrong-typed, carries `#missing` |
+
+When the server sends a JSON error body, `#detail` is the message it carried
+and `#error_code` its code, whether the payload nests them under `"error"` (as
+OpenRouter does) or puts them at the top level. The detail is appended to the
+exception message, so a 422 reads `unprocessable entity: questions.sev.criteria
+must have at least 2 entries` rather than `unprocessable entity`. A body that
+is not a JSON object — an HTML error page, a proxy's plain text — leaves all
+three `nil` and the message unchanged. `#body` is always the raw string.
 
 Status: 0.1.0, API may change.
 
