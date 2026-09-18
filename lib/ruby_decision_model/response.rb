@@ -4,15 +4,27 @@ module RubyDecisionModel
   class Response
     Usage = Data.define(:input_tokens, :output_tokens, :cost)
 
-    attr_reader :answers, :usage, :model, :id, :raw, :request_id
+    REQUEST_ID_HEADER = "x-typesafe-request-id"
 
-    def initialize(answers:, usage:, model:, id:, raw:, request_id: nil)
+    attr_reader :answers, :usage, :model, :id, :raw, :headers
+
+    def initialize(answers:, usage:, model:, id:, raw:, headers: {})
       @answers = answers
       @usage = usage
       @model = model
       @id = id
       @raw = raw
-      @request_id = request_id
+      @headers = headers || {}
+    end
+
+    # The provider's id for this request, when it sends one.
+    def request_id
+      Headers.fetch(headers, REQUEST_ID_HEADER)
+    end
+
+    # A header by name, matched without regard to case.
+    def header(name)
+      Headers.fetch(headers, name)
     end
 
     def [](id)

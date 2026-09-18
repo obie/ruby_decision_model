@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- `ApiError` carries `#request_id` and `#endpoint`. The request id was only
+  ever reachable on a successful response, which is the one case nobody needs
+  it for; the README asks you to quote it when reporting a problem.
+- `Response#headers` keeps every header the transport returned, and
+  `Response#header(name)` looks one up without regard to case. Rate-limit
+  counters and anything else the client does not interpret used to be dropped
+  on the floor.
+- Added `RubyDecisionModel::Headers.fetch`, the case-insensitive header lookup
+  both the response and the retry policy use.
+- `Response.new` takes `headers:` in place of `request_id:`; `#request_id`
+  still reads the same value.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.

@@ -7,8 +7,6 @@ require "uri"
 
 module RubyDecisionModel
   class Client
-    REQUEST_ID_HEADER = "x-typesafe-request-id"
-
     # Kept from 0.0.1 for callers that referenced them. They describe the
     # OpenRouter provider and the default RetryPolicy; prefer those directly.
     DEFAULT_BASE_URL = Providers::OpenRouter.new.default_base_url
@@ -166,21 +164,19 @@ module RubyDecisionModel
       case status
       when 200..299
         parse_success(response_body, response_headers, questions)
-      when 401
-        raise Unauthorized.new("unauthorized", status: status, body: response_body, headers: response_headers)
-      when 413
-        raise PayloadTooLarge.new("payload too large", status: status, body: response_body, headers: response_headers)
-      when 422
-        raise UnprocessableEntity.new("unprocessable entity", status: status, body: response_body,
-                                                              headers: response_headers)
-      when 429
-        raise RateLimited.new("rate limited", status: status, body: response_body, headers: response_headers)
-      when 529
-        raise Overloaded.new("overloaded", status: status, body: response_body, headers: response_headers)
+      when 401 then raise_api_error(Unauthorized, "unauthorized", status, response_body, response_headers)
+      when 413 then raise_api_error(PayloadTooLarge, "payload too large", status, response_body, response_headers)
+      when 422 then raise_api_error(UnprocessableEntity, "unprocessable entity", status, response_body,
+                                    response_headers)
+      when 429 then raise_api_error(RateLimited, "rate limited", status, response_body, response_headers)
+      when 529 then raise_api_error(Overloaded, "overloaded", status, response_body, response_headers)
       else
-        raise ApiError.new("api error (status #{status})", status: status, body: response_body,
-                                                            headers: response_headers)
+        raise_api_error(ApiError, "api error (status #{status})", status, response_body, response_headers)
       end
+    end
+
+    def raise_api_error(klass, message, status, body, headers)
+      raise klass.new(message, status: status, body: body, headers: headers, endpoint: @provider.url)
     end
 
     def parse_success(response_body, response_headers, questions)
@@ -238,19 +234,8 @@ module RubyDecisionModel
         model: parsed["model"],
         id: parsed["id"],
         raw: parsed,
-        request_id: request_id_from(response_headers)
+        headers: response_headers
       )
-    end
-
-    def request_id_from(headers)
-      return nil unless headers.is_a?(Hash)
-
-      headers.each do |key, value|
-        next unless key.to_s.casecmp?(REQUEST_ID_HEADER)
-
-        return value.is_a?(Array) ? value.first : value
-      end
-      nil
     end
 
     class MalformedAnswer < StandardError; end

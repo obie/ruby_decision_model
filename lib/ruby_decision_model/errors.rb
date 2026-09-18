@@ -19,13 +19,22 @@ module RubyDecisionModel
   class TimeoutError < TransportError; end
 
   class ApiError < Error
-    attr_reader :status, :body, :headers
+    REQUEST_ID_HEADER = "x-typesafe-request-id"
 
-    def initialize(message, status:, body:, headers: {})
+    attr_reader :status, :body, :headers, :endpoint
+
+    def initialize(message, status:, body:, headers: {}, endpoint: nil)
       super(message)
       @status = status
       @body = body
       @headers = headers || {}
+      @endpoint = endpoint
+    end
+
+    # The provider's id for the request that failed. This is the one worth
+    # quoting when reporting a problem, and a failure is when you report one.
+    def request_id
+      Headers.fetch(headers, REQUEST_ID_HEADER)
     end
   end
 

@@ -4,6 +4,7 @@ require "net/http"
 require "openssl"
 
 require_relative "ruby_decision_model/version"
+require_relative "ruby_decision_model/headers"
 require_relative "ruby_decision_model/errors"
 require_relative "ruby_decision_model/questions"
 require_relative "ruby_decision_model/answers"

@@ -65,8 +65,9 @@ client = RubyDecisionModel::Client.new(provider: :typesafe)
 Requests go to `https://api.typesafe.ai/v1/systemone`. The default model is
 `jev-latest`. Usage reports `input_tokens` and `output_tokens`; `cost` is `nil`.
 Typesafe returns an `x-typesafe-request-id` header, exposed as
-`response.request_id` (nil on OpenRouter). Quote it when reporting a problem
-to Typesafe.
+`response.request_id` and as `error.request_id` on any `ApiError` (nil on
+OpenRouter). Quote it when reporting a problem to Typesafe — including when
+the request failed, which is when you would.
 
 ### Options
 
@@ -167,6 +168,17 @@ that accepts `url:`, `headers:`, `body:` and returns
 return is still accepted and treated as having no headers, which means no
 `Retry-After` support and a nil `request_id`.
 
+## Response metadata
+
+`response.headers` is every header the transport returned, and
+`response.header(name)` looks one up without regard to case — rate-limit
+counters, for instance, which the client does not interpret.
+
+`ApiError` carries the same `#headers`, plus `#request_id` and `#endpoint`.
+`RubyDecisionModel::Headers.fetch(headers, name)` is the case-insensitive
+lookup on its own; it also takes the first value when a transport hands back
+an Array, as `Net::HTTP` does for a repeated header.
+
 ## Errors
 
 | Error | Meaning |
@@ -174,7 +186,7 @@ return is still accepted and treated as having no headers, which means no
 | `ConfigurationError` | No provider could be resolved, missing api_key, unknown provider, or bad `retry:` value |
 | `RequestError` | Questions hash was empty |
 | `TransportError` (`TimeoutError`) | Network or timeout failure after retries, carries `#cause_error` |
-| `ApiError` | Non-2xx response, carries `#status`, `#body`, and `#headers` |
+| `ApiError` | Non-2xx response, carries `#status`, `#body`, `#headers`, `#request_id`, and `#endpoint` |
 | `Unauthorized` | 401 |
 | `PayloadTooLarge` | 413 |
 | `UnprocessableEntity` | 422 (never retried) |
