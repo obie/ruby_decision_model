@@ -174,12 +174,16 @@ return is still accepted and treated as having no headers, which means no
 | `ConfigurationError` | No provider could be resolved, missing api_key, unknown provider, or bad `retry:` value |
 | `RequestError` | Questions hash was empty |
 | `TransportError` (`TimeoutError`) | Network or timeout failure after retries, carries `#cause_error` |
-| `ApiError` | Non-2xx response, carries `#status`, `#body`, and `#headers` |
+| `ApiError` | Non-2xx response, carries `#status`, `#body`, and `#headers`; the parent of the rest |
+| `BadRequest` | 400 |
 | `Unauthorized` | 401 |
+| `PermissionDenied` | 403 |
+| `NotFound` | 404 |
 | `PayloadTooLarge` | 413 |
 | `UnprocessableEntity` | 422 (never retried) |
 | `RateLimited` | 429 (retried) |
-| `Overloaded` | 529 (retried) |
+| `ServerError` | any 5xx (retried) |
+| `Overloaded` | 529, a `ServerError` (retried) |
 | `InvalidResponse` | Body wasn't JSON, wasn't a Hash, or an answer was malformed |
 | `MissingAnswers` | One or more question ids came back missing or wrong-typed, carries `#missing` |
 

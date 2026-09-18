@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Added `BadRequest` (400), `PermissionDenied` (403), `NotFound` (404), and
+  `ServerError` (any 5xx), matching the classes the official Typesafe SDKs
+  raise. These statuses used to arrive as a bare `ApiError`, so the only way
+  to tell a bad key from a bad URL from an outage was to read `#status`.
+- `Overloaded` (529) is now a `ServerError`, so `rescue ServerError` covers
+  every 5xx while `rescue Overloaded` still picks out that one.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.

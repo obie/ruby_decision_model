@@ -162,25 +162,31 @@ module RubyDecisionModel
       raise TransportError.new("transport error: #{exception.message}", cause_error: exception)
     end
 
+    # Status => [error class, message]. Every status the API documents gets a
+    # class a caller can rescue on its own.
+    ERRORS = {
+      400 => [BadRequest, "bad request"],
+      401 => [Unauthorized, "unauthorized"],
+      403 => [PermissionDenied, "permission denied"],
+      404 => [NotFound, "not found"],
+      413 => [PayloadTooLarge, "payload too large"],
+      422 => [UnprocessableEntity, "unprocessable entity"],
+      429 => [RateLimited, "rate limited"],
+      529 => [Overloaded, "overloaded"]
+    }.freeze
+
     def handle_response(status, response_body, response_headers, questions)
-      case status
-      when 200..299
-        parse_success(response_body, response_headers, questions)
-      when 401
-        raise Unauthorized.new("unauthorized", status: status, body: response_body, headers: response_headers)
-      when 413
-        raise PayloadTooLarge.new("payload too large", status: status, body: response_body, headers: response_headers)
-      when 422
-        raise UnprocessableEntity.new("unprocessable entity", status: status, body: response_body,
-                                                              headers: response_headers)
-      when 429
-        raise RateLimited.new("rate limited", status: status, body: response_body, headers: response_headers)
-      when 529
-        raise Overloaded.new("overloaded", status: status, body: response_body, headers: response_headers)
-      else
-        raise ApiError.new("api error (status #{status})", status: status, body: response_body,
-                                                            headers: response_headers)
+      return parse_success(response_body, response_headers, questions) if (200..299).cover?(status)
+
+      klass, message = ERRORS.fetch(status) do
+        if (500..599).cover?(status)
+          [ServerError, "server error (status #{status})"]
+        else
+          [ApiError, "api error (status #{status})"]
+        end
       end
+
+      raise klass.new(message, status: status, body: response_body, headers: response_headers)
     end
 
     def parse_success(response_body, response_headers, questions)
