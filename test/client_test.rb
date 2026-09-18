@@ -250,36 +250,40 @@ class ClientTest < Minitest::Test
     assert_includes error.message, "urgent"
   end
 
-  def test_malformed_choice_missing_confidence_raises_invalid_response
+  # OpenRouter's published schema requires only type + choice/score, so a
+  # confidence-less answer is valid there and comes back nil. See
+  # answers_test.rb for the same bodies against Typesafe, which documents
+  # confidence as required and rejects them.
+  def test_choice_without_confidence_is_valid_on_open_router
     body = JSON.generate(
       "id" => "resp_7",
       "model" => "typesafe/jev-1.13",
       "answers" => { "category" => { "type" => "choice", "choice" => "bug" } },
       "usage" => {}
     )
-    transport = FakeTransport.new([[200, body]])
-    client = build_client(transport)
+    client = build_client(FakeTransport.new([[200, body]]))
 
-    error = assert_raises(RubyDecisionModel::InvalidResponse) do
-      client.ask(state: {}, questions: { "category" => questions["category"] })
-    end
-    assert_includes error.message, "category"
+    answer = client.ask(state: {}, questions: { "category" => questions["category"] })["category"]
+
+    assert_equal "bug", answer.choice
+    assert_nil answer.confidence
+    assert_empty answer.probabilities
   end
 
-  def test_malformed_score_missing_confidence_raises_invalid_response
+  def test_score_without_confidence_is_valid_on_open_router
     body = JSON.generate(
       "id" => "resp_8",
       "model" => "typesafe/jev-1.13",
       "answers" => { "severity" => { "type" => "score", "score" => 1.4 } },
       "usage" => {}
     )
-    transport = FakeTransport.new([[200, body]])
-    client = build_client(transport)
+    client = build_client(FakeTransport.new([[200, body]]))
 
-    error = assert_raises(RubyDecisionModel::InvalidResponse) do
-      client.ask(state: {}, questions: { "severity" => questions["severity"] })
-    end
-    assert_includes error.message, "severity"
+    answer = client.ask(state: {}, questions: { "severity" => questions["severity"] })["severity"]
+
+    assert_in_delta 1.4, answer.score
+    assert_nil answer.confidence
+    assert_empty answer.legend
   end
 
   def test_unsupported_question_type_raises_invalid_response
@@ -299,7 +303,7 @@ class ClientTest < Minitest::Test
     assert_includes error.message, "mystery"
   end
 
-  def test_non_hash_probabilities_fall_back_to_empty_hash
+  def test_non_hash_probabilities_are_rejected_rather_than_erased
     body = JSON.generate(
       "id" => "resp_10",
       "model" => "typesafe/jev-1.13",
@@ -309,8 +313,10 @@ class ClientTest < Minitest::Test
     transport = FakeTransport.new([[200, body]])
     client = build_client(transport)
 
-    response = client.ask(state: {}, questions: { "urgent" => questions["urgent"] })
-    assert_equal({}, response["urgent"].probabilities)
+    error = assert_raises(RubyDecisionModel::InvalidResponse) do
+      client.ask(state: {}, questions: { "urgent" => questions["urgent"] })
+    end
+    assert_match(/probabilities is not an object/, error.message)
   end
 
   def test_junk_usage_fields_become_nil
