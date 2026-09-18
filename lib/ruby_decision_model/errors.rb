@@ -29,7 +29,15 @@ module RubyDecisionModel
     end
   end
 
+  # One class per status the API documents, so a caller can rescue the case
+  # it knows how to handle. The names follow the official Typesafe SDKs.
+  class BadRequest < ApiError; end
+
   class Unauthorized < ApiError; end
+
+  class PermissionDenied < ApiError; end
+
+  class NotFound < ApiError; end
 
   class PayloadTooLarge < ApiError; end
 
@@ -37,7 +45,11 @@ module RubyDecisionModel
 
   class RateLimited < ApiError; end
 
-  class Overloaded < ApiError; end
+  # Any 5xx. Overloaded is one, so `rescue ServerError` covers both and
+  # `rescue Overloaded` still picks out the one the API defines.
+  class ServerError < ApiError; end
+
+  class Overloaded < ServerError; end
 
   class InvalidResponse < Error
     attr_reader :answers
