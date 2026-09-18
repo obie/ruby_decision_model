@@ -18,6 +18,16 @@ module RubyDecisionModel
         "TYPESAFE_API_KEY"
       end
 
+      # The names the official Typesafe SDKs read; see
+      # https://docs.typesafe.ai/sdk/python/api/constants.
+      def base_url_env
+        "TYPESAFE_BASE_URL"
+      end
+
+      def default_model_env
+        "TYPESAFE_DEFAULT_MODEL"
+      end
+
       def default_base_url
         "https://api.typesafe.ai"
       end
