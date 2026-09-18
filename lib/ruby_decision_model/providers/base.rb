@@ -55,6 +55,20 @@ module RubyDecisionModel
         "#{base_url}#{endpoint_path}"
       end
 
+      # Where this provider lists the models its `model` field accepts, or
+      # nil when it does not offer a list.
+      def models_path
+        nil
+      end
+
+      def lists_models?
+        !models_path.nil?
+      end
+
+      def models_url
+        "#{base_url}#{models_path}" if lists_models?
+      end
+
       def api_key?
         !(api_key.nil? || api_key.to_s.strip.empty?)
       end

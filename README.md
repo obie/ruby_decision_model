@@ -68,6 +68,22 @@ Typesafe returns an `x-typesafe-request-id` header, exposed as
 `response.request_id` (nil on OpenRouter). Quote it when reporting a problem
 to Typesafe.
 
+### Listing models
+
+```ruby
+client = RubyDecisionModel::Client.new(provider: :typesafe)
+
+client.models
+# => [#<data RubyDecisionModel::ModelCard name="jev-latest",
+#      description="The most recent stable, official release",
+#      release_date="2026-02-11">, ...]
+```
+
+`GET /v1/models` returns the names this account can send in `model`. The list
+carries the aliases; a versioned id such as `jev-1.13.0` is accepted by `model`
+whether or not it appears. OpenRouter publishes no equivalent list for
+decisions, so `client.models` raises `ConfigurationError` there.
+
 ### Options
 
 ```ruby
@@ -104,9 +120,9 @@ is whatever the provider returned.
 ### Writing a provider
 
 Subclass `RubyDecisionModel::Providers::Base` and define `name`, `env_var`,
-`default_base_url`, `endpoint_path`, `default_model`, and optionally `aliases`
-and `reports_cost?`. Override `headers`, `request_body`, or `usage` when the
-wire format differs. Pass an instance as `provider:`.
+`default_base_url`, `endpoint_path`, `default_model`, and optionally `aliases`,
+`reports_cost?`, and `models_path`. Override `headers`, `request_body`, or
+`usage` when the wire format differs. Pass an instance as `provider:`.
 
 ## Questions and answers
 
@@ -166,6 +182,11 @@ that accepts `url:`, `headers:`, `body:` and returns
 `[status, body_string, headers_hash]`. A two-element `[status, body_string]`
 return is still accepted and treated as having no headers, which means no
 `Retry-After` support and a nil `request_id`.
+
+A transport that also declares a `method:` keyword (or `**`) is told which verb
+to use — `:post` for `ask`, `:get` for `models`. One that does not is called
+exactly as before and always POSTs, so `client.models` raises
+`ConfigurationError` rather than posting to the model list.
 
 ## Errors
 

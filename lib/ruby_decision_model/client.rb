@@ -63,6 +63,24 @@ module RubyDecisionModel
       handle_response(status, response_body, response_headers, questions)
     end
 
+    # The names this account may send in `model`, as ModelCards. Providers
+    # that do not publish a list raise ConfigurationError.
+    def models
+      unless @provider.lists_models?
+        raise ConfigurationError, "#{@provider.name} does not publish a model list"
+      end
+
+      unless transport_accepts_method?
+        raise ConfigurationError,
+              "listing models needs a GET, and this transport takes no method: keyword"
+      end
+
+      status, body, headers = perform_with_retry(
+        url: @provider.models_url, headers: @provider.headers, body: nil, method: :get
+      )
+      handle_models_response(status, body, headers)
+    end
+
     private
 
     def resolve_provider(provider, api_key:, base_url:)
@@ -88,24 +106,69 @@ module RubyDecisionModel
       end
     end
 
+    REQUEST_CLASSES = { post: Net::HTTP::Post, get: Net::HTTP::Get }.freeze
+
     def default_transport
-      lambda do |url:, headers:, body:|
+      lambda do |url:, headers:, body:, method: :post|
         uri = URI.parse(url)
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = uri.scheme == "https"
         http.open_timeout = @timeout
         http.read_timeout = @timeout
 
-        request = Net::HTTP::Post.new(uri.request_uri)
+        request = REQUEST_CLASSES.fetch(method).new(uri.request_uri)
         headers.each { |k, v| request[k] = v }
-        request.body = body
+        request.body = body unless body.nil?
 
         response = http.request(request)
         [response.code.to_i, response.body, response.each_header.to_h]
       end
     end
 
-    def perform_with_retry(url:, headers:, body:)
+    # The transport contract grew a `method:` keyword for the one endpoint
+    # that is not a POST. A transport written against the old contract is
+    # called the way it always was, and cannot be asked for a GET.
+    def transport_accepts_method?
+      return @transport_accepts_method unless @transport_accepts_method.nil?
+
+      parameters = @transport.respond_to?(:parameters) ? @transport.parameters : @transport.method(:call).parameters
+      @transport_accepts_method = parameters.any? do |kind, name|
+        kind == :keyrest || (%i[key keyreq].include?(kind) && name == :method)
+      end
+    end
+
+    def call_transport(url:, headers:, body:, method:)
+      if transport_accepts_method?
+        @transport.call(url: url, headers: headers, body: body, method: method)
+      else
+        @transport.call(url: url, headers: headers, body: body)
+      end
+    end
+
+    def handle_models_response(status, response_body, response_headers)
+      unless (200..299).cover?(status)
+        return handle_response(status, response_body, response_headers, {})
+      end
+
+      parsed = parse_json(response_body)
+      raise InvalidResponse, "model list was not a JSON object" unless parsed.is_a?(Hash)
+
+      listed = parsed["models"]
+      raise InvalidResponse, "model list had no models array" unless listed.is_a?(Array)
+
+      listed.map { |entry| model_card(entry) }
+    end
+
+    def model_card(entry)
+      raise InvalidResponse, "model list entry was not an object" unless entry.is_a?(Hash)
+
+      name = entry["name"]
+      raise InvalidResponse, "model list entry had no name" unless name.is_a?(String) && !name.empty?
+
+      ModelCard.new(name: name, description: entry["description"], release_date: entry["release_date"])
+    end
+
+    def perform_with_retry(url:, headers:, body:, method: :post)
       policy = @retry_policy
       started_at = @clock.call
       retries = 0
@@ -113,7 +176,7 @@ module RubyDecisionModel
       loop do
         begin
           status, response_body, response_headers = normalize_transport_result(
-            @transport.call(url: url, headers: headers, body: body)
+            call_transport(url: url, headers: headers, body: body, method: method)
           )
         rescue Error
           raise
@@ -184,13 +247,7 @@ module RubyDecisionModel
     end
 
     def parse_success(response_body, response_headers, questions)
-      raise InvalidResponse, "response body was empty" if response_body.nil? || response_body.to_s.strip.empty?
-
-      parsed = begin
-        JSON.parse(response_body.to_s)
-      rescue JSON::ParserError => e
-        raise InvalidResponse, "response body was not valid JSON: #{e.message}"
-      end
+      parsed = parse_json(response_body)
 
       raise InvalidResponse, "response body was not a JSON object" unless parsed.is_a?(Hash)
 
@@ -240,6 +297,14 @@ module RubyDecisionModel
         raw: parsed,
         request_id: request_id_from(response_headers)
       )
+    end
+
+    def parse_json(response_body)
+      raise InvalidResponse, "response body was empty" if response_body.nil? || response_body.to_s.strip.empty?
+
+      JSON.parse(response_body.to_s)
+    rescue JSON::ParserError => e
+      raise InvalidResponse, "response body was not valid JSON: #{e.message}"
     end
 
     def request_id_from(headers)

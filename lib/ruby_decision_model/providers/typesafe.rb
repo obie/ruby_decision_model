@@ -26,6 +26,11 @@ module RubyDecisionModel
         "/v1/systemone"
       end
 
+      # https://docs.typesafe.ai/models#listing-models
+      def models_path
+        "/v1/models"
+      end
+
       def default_model
         "jev-latest"
       end

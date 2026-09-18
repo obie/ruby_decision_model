@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Added `Client#models`, which lists the model names an account can send in
+  `model` as `ModelCard`s (`name`, `description`, `release_date`). Typesafe
+  publishes this at `GET /v1/models` and both official SDKs expose it; this
+  client had no way to reach it.
+- Providers declare a `models_path`; `lists_models?` and `models_url` follow
+  from it. OpenRouter publishes no decision-model list, so `client.models`
+  raises `ConfigurationError` there rather than guessing a URL.
+- The transport contract accepts an optional `method:` keyword (`:post` for
+  `ask`, `:get` for `models`). Transports that do not declare it are called
+  unchanged and cannot be asked for a GET.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
