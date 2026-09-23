@@ -25,6 +25,8 @@ module RubyDecisionModel
     # api_key:   overrides the provider's env var.
     # model:     nil means the provider default; aliases resolve per provider.
     # base_url:  overrides the provider base URL.
+    #            A provider that runs the model itself supplies its own
+    #            transport, and api_key: and base_url: do not apply to it.
     # transport: callable(url:, headers:, body:) returning
     #            [status, body_string, headers_hash] (a 2-element return is
     #            still accepted and treated as having no headers).
@@ -35,14 +37,16 @@ module RubyDecisionModel
                    transport: nil, sleeper: ->(seconds) { sleep(seconds) }, retry: {},
                    random: -> { rand }, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
       @provider = resolve_provider(provider, api_key: api_key, base_url: base_url)
-      unless @provider.api_key?
+      if @provider.requires_api_key? && !@provider.api_key?
         raise ConfigurationError,
               "api_key is required for #{@provider.name}: pass api_key: or set #{@provider.env_var}"
       end
 
       @model = @provider.resolve_model(model)
       @timeout = timeout
-      @transport = transport || default_transport
+      # A provider that runs locally brings its own; an explicit transport: still
+      # wins, so a test can stand in for either kind.
+      @transport = transport || @provider.transport || default_transport
       @sleeper = sleeper
       @retry_policy = RetryPolicy.from(binding.local_variable_get(:retry))
       @random = random

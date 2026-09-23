@@ -12,7 +12,7 @@ module RubyDecisionModel
       attr_reader :api_key
 
       def initialize(api_key: nil, base_url: nil)
-        @api_key = api_key || ENV.fetch(env_var, nil)
+        @api_key = api_key || (env_var && ENV.fetch(env_var, nil))
         @base_url = base_url
       end
 
@@ -21,8 +21,24 @@ module RubyDecisionModel
         raise NotImplementedError
       end
 
+      # Nil for a provider with no credential to read, such as one that runs
+      # the model in this process.
       def env_var
-        raise NotImplementedError
+        nil
+      end
+
+      # Whether Client should refuse to start without a key.
+      def requires_api_key?
+        true
+      end
+
+      # A provider that does not speak HTTP returns its own callable here, with
+      # the shape Client's transport takes: (url:, headers:, body:) =>
+      # [status, body, headers]. Nil means "use Client's HTTP transport", which
+      # is what a hosted provider wants. Returning one here keeps retries,
+      # response parsing and the typed Answers exactly as they are.
+      def transport
+        nil
       end
 
       def default_base_url
