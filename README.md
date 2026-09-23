@@ -68,11 +68,68 @@ Typesafe returns an `x-typesafe-request-id` header, exposed as
 `response.request_id` (nil on OpenRouter). Quote it when reporting a problem
 to Typesafe.
 
+### Writing a provider
+
+A provider can live in its own gem. Subclass `Providers::Base`, answer the few
+questions the client asks, and register the class when your gem is required:
+
+```ruby
+module RubyDecisionModel
+  module Providers
+    class Acme < Base
+      def name = :acme
+      def env_var = "ACME_API_KEY"
+      def default_base_url = "https://api.acme.example"
+      def endpoint_path = "/v1/decisions"
+      def default_model = "acme-1"
+      def aliases = { "acme" => "acme-1" }
+    end
+  end
+end
+
+RubyDecisionModel::Providers.register(:acme, RubyDecisionModel::Providers::Acme)
+```
+
+`Client.new(provider: :acme)` then works like anything in this repository, and
+so do retries, error mapping and the typed answers, because a provider decides
+where the request goes and how usage is read, not what happens afterwards.
+
+A provider that runs a model in-process rather than calling a service overrides
+two more:
+
+```ruby
+def requires_api_key? = false   # nothing to authenticate against
+
+def transport                   # same shape as Client's transport
+  lambda do |url:, headers:, body:|
+    request = JSON.parse(body)
+    [200, JSON.generate(answer_locally(request)), {}]
+  end
+end
+```
+
+Return the payload the hosted APIs return, `answers` and `usage`, and the rest of
+the client treats it identically. An explicit `transport:` passed to `Client`
+still wins, which is how tests substitute either kind.
+
+Name the gem after the provider, `ruby_decision_model-providers-acme`, and have people
+require it directly so registration happens at load:
+
+```ruby
+gem "ruby_decision_model-providers-acme", require: "ruby_decision_model/providers/acme"
+```
+
+Known provider gems:
+
+| Gem | Provider | Runs |
+| --- | --- | --- |
+| [ruby_decision_model-providers-laya](https://github.com/codenamev/ruby_decision_model-providers-laya) | `:laya` | Locally, through [ruby-laya](https://github.com/codenamev/ruby-laya) |
+
 ### Options
 
 ```ruby
 RubyDecisionModel::Client.new(
-  provider: :typesafe,        # :open_router, :typesafe, or a Providers::Base instance
+  provider: :typesafe,        # :open_router, :typesafe, a registered name, or a Providers::Base
   api_key: nil,               # overrides the provider's env var
   model: nil,                 # nil means the provider default; see aliases below
   base_url: nil,              # overrides the provider base URL

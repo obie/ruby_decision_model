@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- `Providers.register(name, klass)` lets a provider live in its own gem and add
+  itself to the registry, the way `ruby_decision_model-providers-laya` does. `Providers`
+  also gained `registered?`, and `build` forwards extra keyword arguments so a
+  provider can take its own options.
+- `Providers::Base` gained two hooks for a provider that runs a model in-process
+  instead of calling a service, both defaulting to what the hosted providers
+  already did: `requires_api_key?` (true) and `transport` (nil, meaning Client's
+  HTTP transport). `env_var` now defaults to nil rather than raising, for a
+  provider with no credential to read.
+- `Client` honours both, so a local provider needs no key and answers without
+  the network while keeping retries, error mapping and typed answers unchanged.
+
 ## 0.1.0 - 2026-09-18
 
 Provider-neutral release. One `Client`, two providers behind it.
