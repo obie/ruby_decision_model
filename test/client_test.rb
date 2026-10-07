@@ -125,6 +125,19 @@ class ClientTest < Minitest::Test
     assert_equal 500, error.status
   end
 
+  # Value: protects=529 maps to Overloaded and carries the vendor error text in the message
+  # Value: fails_when=ERROR_CLASSES loses 529 or the detail append is skipped for non-4xx statuses
+  # Value: why_new=no existing test hits 529; only 401, 413, 422, 429, 500 are asserted
+  # Value: seam=none
+  def test_529_raises_overloaded_with_vendor_detail_after_retries
+    body = '{"error":{"message":"model is busy"}}'
+    transport = FakeTransport.new([[529, body]])
+    error = assert_raises(RubyDecisionModel::Overloaded) { build_client(transport).ask(state: {}, questions: questions) }
+    assert_equal 529, error.status
+    assert_includes error.message, "overloaded: model is busy"
+    assert_equal body, error.body
+  end
+
   # --- retry ---
 
   def test_retries_once_on_503_then_succeeds
@@ -303,14 +316,78 @@ class ClientTest < Minitest::Test
     body = JSON.generate(
       "id" => "resp_10",
       "model" => "typesafe/jev-1.13",
-      "answers" => { "urgent" => { "type" => "noul", "noul" => 0.5, "probabilities" => %w[not a hash] } },
+      "answers" => { "category" => { "type" => "choice", "choice" => "bug", "confidence" => 0.9,
+                                      "probabilities" => %w[not a hash] } },
+      "usage" => {}
+    )
+    transport = FakeTransport.new([[200, body]])
+    client = build_client(transport)
+
+    response = client.ask(state: {}, questions: { "category" => questions["category"] })
+    assert_equal({}, response["category"].probabilities)
+  end
+
+  def test_noul_outside_zero_to_one_is_malformed
+    [1.7, -0.1, 1.0001].each do |value|
+      body = JSON.generate("answers" => { "urgent" => { "type" => "noul", "noul" => value } })
+      client = build_client(FakeTransport.new([[200, body]]))
+
+      error = assert_raises(RubyDecisionModel::InvalidResponse, value.to_s) do
+        client.ask(state: {}, questions: { "urgent" => questions["urgent"] })
+      end
+      refute_kind_of RubyDecisionModel::MissingAnswers, error
+    end
+
+    [0, 1].each do |value|
+      body = JSON.generate("answers" => { "urgent" => { "type" => "noul", "noul" => value } })
+      response = build_client(FakeTransport.new([[200, body]])).ask(state: {}, questions: { "urgent" => questions["urgent"] })
+      assert_in_delta value, response["urgent"].noul
+    end
+  end
+
+  def test_deeply_nested_state_raises_request_error
+    state = JSON.parse(("[" * 100) + ("]" * 100))
+    transport = FakeTransport.new([[200, success_body]])
+
+    error = assert_raises(RubyDecisionModel::RequestError) do
+      build_client(transport).ask(state: { "nested" => state }, questions: questions)
+    end
+    assert_kind_of JSON::NestingError, error.cause
+    assert_empty transport.calls
+  end
+
+  def test_state_with_invalid_utf8_raises_request_error_before_sending
+    transport = FakeTransport.new([[200, success_body]])
+
+    assert_raises(RubyDecisionModel::RequestError) do
+      build_client(transport).ask(state: { "title" => "bad \xFF".b.force_encoding("UTF-8") }, questions: questions)
+    end
+    assert_empty transport.calls
+  end
+
+  def test_noul_without_probabilities_gets_a_true_false_split
+    body = JSON.generate(
+      "model" => "jev-1.13.0",
+      "answers" => { "urgent" => { "type" => "noul", "noul" => 0.75 } },
       "usage" => {}
     )
     transport = FakeTransport.new([[200, body]])
     client = build_client(transport)
 
     response = client.ask(state: {}, questions: { "urgent" => questions["urgent"] })
-    assert_equal({}, response["urgent"].probabilities)
+    assert_equal({ "true" => 0.75, "false" => 0.25 }, response["urgent"].probabilities)
+    assert_nil response.id
+  end
+
+  def test_noul_with_junk_probabilities_gets_a_true_false_split
+    body = JSON.generate(
+      "answers" => { "urgent" => { "type" => "noul", "noul" => 0.5, "probabilities" => %w[not a hash] } }
+    )
+    transport = FakeTransport.new([[200, body]])
+    client = build_client(transport)
+
+    response = client.ask(state: {}, questions: { "urgent" => questions["urgent"] })
+    assert_equal({ "true" => 0.5, "false" => 0.5 }, response["urgent"].probabilities)
   end
 
   def test_junk_usage_fields_become_nil

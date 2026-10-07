@@ -48,12 +48,16 @@ module RubyDecisionModel
     end
   end
 
+  # Raised when any question went unanswered. `missing` lists every such id.
+  # `refused` lists the ones the provider explicitly declined, a subset of
+  # `missing`. Answers that did arrive are on `answers`.
   class MissingAnswers < InvalidResponse
-    attr_reader :missing
+    attr_reader :missing, :refused
 
-    def initialize(message, answers: {}, missing: [])
+    def initialize(message, answers: {}, missing: [], refused: [])
       super(message, answers: answers)
       @missing = missing
+      @refused = refused
     end
   end
 end

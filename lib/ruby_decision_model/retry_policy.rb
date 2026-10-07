@@ -21,7 +21,7 @@ module RubyDecisionModel
   )
     DEFAULT_STATUSES = ([408, 429] + (500..599).to_a).freeze
 
-    TIMEOUT_EXCEPTIONS = [Net::OpenTimeout, Net::ReadTimeout].freeze
+    TIMEOUT_EXCEPTIONS = [Net::OpenTimeout, Net::ReadTimeout, Net::WriteTimeout].freeze
     CONNECTION_EXCEPTIONS = [
       Errno::ECONNRESET,
       Errno::ECONNREFUSED,

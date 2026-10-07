@@ -7,6 +7,7 @@ module RubyDecisionModel
     class Typesafe < Base
       ALIASES = {
         "typesafe/jev-1.13" => "jev-latest",
+        "~typesafe/jev-latest" => "jev-latest",
         "jev" => "jev-latest"
       }.freeze
 
