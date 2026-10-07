@@ -7,41 +7,48 @@ require "uri"
 
 module RubyDecisionModel
   class Client
-    REQUEST_ID_HEADER = "x-typesafe-request-id"
-
     # Kept from 0.0.1 for callers that referenced them. They describe the
-    # OpenRouter provider and the default RetryPolicy; prefer those directly.
+    # Typesafe and OpenRouter providers and the default RetryPolicy; prefer
+    # those directly. Each provider now names its own request id header.
+    REQUEST_ID_HEADER = "x-typesafe-request-id"
     DEFAULT_BASE_URL = Providers::OpenRouter.new.default_base_url
     DEFAULT_MODEL = Providers::OpenRouter.new.default_model
     MAX_ATTEMPTS = RetryPolicy.new.max_retries + 1
     RETRYABLE_STATUSES = RetryPolicy::DEFAULT_STATUSES
     RETRYABLE_EXCEPTIONS = (RetryPolicy::TIMEOUT_EXCEPTIONS + RetryPolicy::CONNECTION_EXCEPTIONS).freeze
 
-    attr_reader :provider, :model, :retry_policy, :timeout
+    # Connecting is quick wherever the answer is slow, so the open timeout
+    # stays short unless the caller sets timeout: explicitly.
+    DEFAULT_OPEN_TIMEOUT = 5
 
-    # provider:  :open_router, :typesafe, or a Providers::Base instance. When
-    #            nil, api_key: alone selects OpenRouter; otherwise the
-    #            environment decides (TYPESAFE_API_KEY, then OPENROUTER_API_KEY).
+    attr_reader :provider, :model, :retry_policy, :timeout, :open_timeout
+
+    # provider:  a name from Providers.names or a Providers::Base instance.
+    #            When nil, RUBY_DECISION_MODEL_PROVIDER names one if set;
+    #            otherwise api_key: alone selects OpenRouter, and with no
+    #            api_key: the environment decides (see Providers.from_env).
     # api_key:   overrides the provider's env var.
     # model:     nil means the provider default; aliases resolve per provider.
     # base_url:  overrides the provider base URL.
+    # timeout:   read timeout in seconds, and open timeout too when given;
+    #            nil means the provider's read default (5 for Jev-speed APIs,
+    #            30 where the vendor documents multi-second responses) with a
+    #            5 second open timeout.
     # transport: callable(url:, headers:, body:) returning
     #            [status, body_string, headers_hash] (a 2-element return is
     #            still accepted and treated as having no headers).
     # retry:     a RetryPolicy or a Hash of overrides.
     # random:    callable returning a Float in 0...1, used for backoff jitter.
     # clock:     callable returning monotonic seconds, used for total_timeout.
-    def initialize(provider: nil, api_key: nil, model: nil, base_url: nil, timeout: 5,
+    def initialize(provider: nil, api_key: nil, model: nil, base_url: nil, timeout: nil,
                    transport: nil, sleeper: ->(seconds) { sleep(seconds) }, retry: {},
                    random: -> { rand }, clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
       @provider = resolve_provider(provider, api_key: api_key, base_url: base_url)
-      unless @provider.api_key?
-        raise ConfigurationError,
-              "api_key is required for #{@provider.name}: pass api_key: or set #{@provider.env_var}"
-      end
+      @provider.validate!
 
       @model = @provider.resolve_model(model)
-      @timeout = timeout
+      @timeout = timeout || @provider.default_timeout
+      @open_timeout = timeout || DEFAULT_OPEN_TIMEOUT
       @transport = transport || default_transport
       @sleeper = sleeper
       @retry_policy = RetryPolicy.from(binding.local_variable_get(:retry))
@@ -53,17 +60,45 @@ module RubyDecisionModel
       @provider.base_url
     end
 
-    def ask(state:, questions:)
+    # images: data URLs (see Images) for providers that read images. Each
+    # provider places them where its API expects.
+    def ask(state:, questions:, images: nil)
       raise RequestError, "questions must not be empty" if questions.nil? || questions.empty?
 
-      body = @provider.request_body(model: @model, state: state, questions: questions)
+      body = build_body(state, questions, images)
       status, response_body, response_headers = perform_with_retry(
-        url: @provider.url, headers: @provider.headers, body: body
+        url: request_url, headers: @provider.headers, body: body
       )
       handle_response(status, response_body, response_headers, questions)
     end
 
     private
+
+    # Providers written against 0.1.0 may override url without the model
+    # argument added in 0.2.0.
+    def request_url
+      takes_model = @provider.method(:url).parameters.any? { |type, _| %i[req opt rest].include?(type) }
+      takes_model ? @provider.url(@model) : @provider.url
+    end
+
+    def build_body(state, questions, images)
+      images = Array(images)
+      return @provider.request_body(model: @model, state: state, questions: questions) if images.empty?
+
+      raise RequestError, "#{@provider.name} does not accept images" unless @provider.supports_images?
+
+      images.each do |image|
+        next if image.is_a?(String) && image.start_with?("data:image/")
+
+        raise RequestError, "images must be data URLs (data:image/...); see RubyDecisionModel::Images"
+      end
+
+      @provider.request_body(model: @model, state: state, questions: questions, images: images)
+    rescue JSON::GeneratorError, JSON::NestingError => e
+      # The generator's message can quote the offending value, so it stays
+      # on #cause rather than in a message that may be logged.
+      raise RequestError, "state or questions could not be encoded as JSON (#{e.class})"
+    end
 
     def resolve_provider(provider, api_key:, base_url:)
       case provider
@@ -81,7 +116,7 @@ module RubyDecisionModel
             "no provider configured: pass provider: or api_key:, or set one of #{Providers.env_vars.join(', ')}"
           )
         else
-          Providers.build(:open_router, api_key: api_key, base_url: base_url)
+          Providers.build(Providers.named_in_env || :open_router, api_key: api_key, base_url: base_url)
         end
       else
         raise ConfigurationError, "provider must be a Symbol or a Providers::Base, got #{provider.class}"
@@ -93,8 +128,9 @@ module RubyDecisionModel
         uri = URI.parse(url)
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = uri.scheme == "https"
-        http.open_timeout = @timeout
+        http.open_timeout = @open_timeout
         http.read_timeout = @timeout
+        http.write_timeout = @timeout
 
         request = Net::HTTP::Post.new(uri.request_uri)
         headers.each { |k, v| request[k] = v }
@@ -162,25 +198,23 @@ module RubyDecisionModel
       raise TransportError.new("transport error: #{exception.message}", cause_error: exception)
     end
 
+    ERROR_CLASSES = {
+      401 => [Unauthorized, "unauthorized"],
+      413 => [PayloadTooLarge, "payload too large"],
+      422 => [UnprocessableEntity, "unprocessable entity"],
+      429 => [RateLimited, "rate limited"],
+      529 => [Overloaded, "overloaded"]
+    }.freeze
+    private_constant :ERROR_CLASSES
+
     def handle_response(status, response_body, response_headers, questions)
-      case status
-      when 200..299
-        parse_success(response_body, response_headers, questions)
-      when 401
-        raise Unauthorized.new("unauthorized", status: status, body: response_body, headers: response_headers)
-      when 413
-        raise PayloadTooLarge.new("payload too large", status: status, body: response_body, headers: response_headers)
-      when 422
-        raise UnprocessableEntity.new("unprocessable entity", status: status, body: response_body,
-                                                              headers: response_headers)
-      when 429
-        raise RateLimited.new("rate limited", status: status, body: response_body, headers: response_headers)
-      when 529
-        raise Overloaded.new("overloaded", status: status, body: response_body, headers: response_headers)
-      else
-        raise ApiError.new("api error (status #{status})", status: status, body: response_body,
-                                                            headers: response_headers)
-      end
+      return parse_success(response_body, response_headers, questions) if (200..299).cover?(status)
+
+      klass, message = ERROR_CLASSES.fetch(status) { [ApiError, "api error (status #{status})"] }
+      detail = @provider.error_message(response_body)
+      message = "#{message}: #{detail}" if detail
+
+      raise klass.new(message, status: status, body: response_body, headers: response_headers)
     end
 
     def parse_success(response_body, response_headers, questions)
@@ -194,12 +228,16 @@ module RubyDecisionModel
 
       raise InvalidResponse, "response body was not a JSON object" unless parsed.is_a?(Hash)
 
-      raw_answers = parsed["answers"]
+      canonical = @provider.normalize_response(parsed, questions: questions)
+      raise InvalidResponse, "response body was not a JSON object" unless canonical.is_a?(Hash)
+
+      raw_answers = canonical["answers"]
       raw_answers = {} unless raw_answers.is_a?(Hash)
 
       normalized = {}
       malformed = []
       missing = []
+      refused = []
 
       questions.each do |raw_id, question|
         id = raw_id.to_s
@@ -213,6 +251,7 @@ module RubyDecisionModel
             malformed << id
           end
         else
+          refused << id if answer_hash.is_a?(Hash) && answer_hash["type"] == "refusal"
           missing << id
         end
       end
@@ -225,28 +264,27 @@ module RubyDecisionModel
       end
 
       if missing.any?
-        raise MissingAnswers.new(
-          "missing or wrong-type answers for: #{missing.join(', ')}",
-          answers: normalized,
-          missing: missing
-        )
+        message = "missing or wrong-type answers for: #{missing.join(', ')}"
+        message += " (refused: #{refused.join(', ')})" if refused.any?
+        raise MissingAnswers.new(message, answers: normalized, missing: missing, refused: refused)
       end
 
       Response.new(
         answers: normalized,
-        usage: @provider.usage(parsed),
-        model: parsed["model"],
-        id: parsed["id"],
+        usage: @provider.usage(canonical),
+        model: canonical["model"],
+        id: canonical["id"],
         raw: parsed,
         request_id: request_id_from(response_headers)
       )
     end
 
     def request_id_from(headers)
-      return nil unless headers.is_a?(Hash)
+      header = @provider.request_id_header
+      return nil unless header && headers.is_a?(Hash)
 
       headers.each do |key, value|
-        next unless key.to_s.casecmp?(REQUEST_ID_HEADER)
+        next unless key.to_s.casecmp?(header)
 
         return value.is_a?(Array) ? value.first : value
       end
@@ -259,7 +297,7 @@ module RubyDecisionModel
       case type
       when "noul"
         noul = hash["noul"]
-        raise MalformedAnswer unless noul.is_a?(Numeric)
+        raise MalformedAnswer unless noul.is_a?(Numeric) && noul.between?(0, 1)
 
         Answers::Noul.new(noul: noul.to_f, probabilities: hash_or_empty(hash["probabilities"]))
       when "choice"

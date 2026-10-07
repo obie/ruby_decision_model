@@ -5,9 +5,17 @@ require_relative "base"
 module RubyDecisionModel
   module Providers
     class OpenRouter < Base
+      # Short names resolve to the decision models OpenRouter routes, so the
+      # same model: works here and on each vendor's own provider.
       ALIASES = {
         "jev" => "typesafe/jev-1.13",
-        "jev-latest" => "typesafe/jev-1.13"
+        "jev-latest" => "typesafe/jev-1.13",
+        "luna" => "openai/gpt-6-luna-decisions",
+        "gpt-6-luna" => "openai/gpt-6-luna-decisions",
+        "clef" => "cloudflare/clef",
+        "clef-flash" => "cloudflare/clef-flash",
+        "pplx-decider" => "perplexity/pplx-decider-v1-27b",
+        "pplx-decider-v1-27b" => "perplexity/pplx-decider-v1-27b"
       }.freeze
 
       def name

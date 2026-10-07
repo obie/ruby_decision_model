@@ -3,6 +3,17 @@
 require "test_helper"
 
 class RetryTest < Minitest::Test
+  def test_write_timeout_is_retried_and_raised_as_timeout_error
+    transport = FakeTransport.new([Net::WriteTimeout.new])
+    client = RubyDecisionModel::Client.new(provider: :typesafe, api_key: "k", transport: transport, sleeper: no_sleep)
+
+    error = assert_raises(RubyDecisionModel::TimeoutError) do
+      client.ask(state: {}, questions: { "a" => RubyDecisionModel::Questions.noul("q?") })
+    end
+    assert_equal 3, transport.calls.length
+    assert_kind_of Net::WriteTimeout, error.cause_error
+  end
+
   def questions
     { "urgent" => RubyDecisionModel::Questions.noul("Is this urgent?") }
   end
