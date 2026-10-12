@@ -119,6 +119,135 @@ class VendorProvidersTest < Minitest::Test
     assert_equal [png], JSON.parse(transport.calls.first[:body])["images"]
   end
 
+  def test_cloudflare_clef_omni_sends_images_audio_and_videos
+    transport = FakeTransport.new([[200, cloudflare_body, {}]])
+    audio = RubyDecisionModel::Media.data_url("ID3", content_type: "audio/mpeg")
+    video = RubyDecisionModel::Media.data_url("ftyp", content_type: "video/mp4")
+    cloudflare(transport, model: "clef-omni").ask(state: "What happens?", questions: questions,
+                                                  images: [png], audio: [audio], videos: [video])
+
+    call = transport.calls.first
+    assert call[:url].end_with?("/@cf/cloudflare/clef-omni")
+    body = JSON.parse(call[:body])
+    assert_equal "clef-omni", body["model"]
+    assert_equal [png], body["images"]
+    assert_equal [audio], body["audio"]
+    assert_equal [video], body["videos"]
+  end
+
+  def test_cloudflare_clef_omni_sends_only_the_media_given
+    transport = FakeTransport.new([[200, cloudflare_body, {}]])
+    audio = RubyDecisionModel::Media.data_url("RIFF", content_type: "audio/wav")
+    cloudflare(transport, model: "clef-omni").ask(state: "x", questions: questions, audio: [audio])
+
+    body = JSON.parse(transport.calls.first[:body])
+    assert_equal [audio], body["audio"]
+    refute body.key?("images")
+    refute body.key?("videos")
+  end
+
+  def test_cloudflare_clef_and_clef_flash_refuse_audio_and_videos
+    audio = RubyDecisionModel::Media.data_url("ID3", content_type: "audio/mpeg")
+    video = RubyDecisionModel::Media.data_url("ftyp", content_type: "video/mp4")
+
+    transport = FakeTransport.new([[200, cloudflare_body, {}]])
+    error = assert_raises(RubyDecisionModel::RequestError) do
+      cloudflare(transport).ask(state: "x", questions: questions, audio: [audio])
+    end
+    assert_includes error.message, "clef does not accept audio"
+    assert_empty transport.calls
+
+    transport = FakeTransport.new([[200, cloudflare_body, {}]])
+    error = assert_raises(RubyDecisionModel::RequestError) do
+      cloudflare(transport, model: "clef-flash").ask(state: "x", questions: questions, videos: [video])
+    end
+    assert_includes error.message, "does not accept videos"
+    assert_empty transport.calls
+  end
+
+  def test_cloudflare_clef_omni_aliases_resolve
+    %w[cloudflare/clef-omni @cf/cloudflare/clef-omni].each do |name|
+      transport = FakeTransport.new([[200, cloudflare_body, {}]])
+      client = cloudflare(transport, model: name)
+      client.ask(state: "x", questions: questions)
+
+      assert_equal "clef-omni", client.model
+      assert transport.calls.first[:url].end_with?("/clef-omni")
+    end
+  end
+
+  def test_cloudflare_clef_omni_audio_and_videos_must_be_matching_data_urls
+    transport = FakeTransport.new([[200, cloudflare_body, {}]])
+    client = cloudflare(transport, model: "clef-omni")
+
+    error = assert_raises(RubyDecisionModel::RequestError) do
+      client.ask(state: "x", questions: questions, audio: ["https://example.test/a.mp3"])
+    end
+    assert_includes error.message, "data:audio/"
+    error = assert_raises(RubyDecisionModel::RequestError) do
+      client.ask(state: "x", questions: questions, videos: ["data:image/png;base64,AAAA"])
+    end
+    assert_includes error.message, "data:video/"
+    assert_raises(RubyDecisionModel::RequestError) { client.ask(state: "x", questions: questions, audio: [png]) }
+    assert_empty transport.calls
+  end
+
+  def test_cloudflare_clef_omni_ignores_empty_audio_and_videos
+    transport = FakeTransport.new([[200, cloudflare_body, {}]])
+    cloudflare(transport, model: "clef-omni").ask(state: "x", questions: questions, audio: [], videos: [])
+
+    body = JSON.parse(transport.calls.first[:body])
+    refute body.key?("audio")
+    refute body.key?("videos")
+  end
+
+  def test_cloudflare_supports_audio_and_videos_only_for_clef_omni
+    provider = RubyDecisionModel::Providers::Cloudflare.new(api_key: "cf-token", account_id: "acc123")
+
+    assert provider.supports_audio?("clef-omni")
+    assert provider.supports_videos?("clef-omni")
+    %w[clef clef-flash].each do |model|
+      refute provider.supports_audio?(model)
+      refute provider.supports_videos?(model)
+    end
+    refute provider.supports_audio?
+    refute provider.supports_videos?(nil)
+  end
+
+  def test_cloudflare_clef_omni_refuses_any_element_that_is_not_a_matching_data_url
+    audio = RubyDecisionModel::Media.data_url("ID3", content_type: "audio/mpeg")
+    transport = FakeTransport.new([[200, cloudflare_body, {}]])
+    client = cloudflare(transport, model: "clef-omni")
+
+    [[audio, "https://example.test/a.mp3"], [audio, nil], [nil], [audio, :clip], [audio, png]].each do |urls|
+      assert_raises(RubyDecisionModel::RequestError) { client.ask(state: "x", questions: questions, audio: urls) }
+    end
+    error = assert_raises(RubyDecisionModel::RequestError) do
+      client.ask(state: "x", questions: questions, videos: ["data:audio/mpeg;base64,AAAA"])
+    end
+    assert_equal "videos must be data URLs (data:video/...); see RubyDecisionModel::Media", error.message
+    assert_empty transport.calls
+  end
+
+  def test_cloudflare_clef_omni_wraps_a_single_data_url_string
+    audio = RubyDecisionModel::Media.data_url("ID3", content_type: "audio/mpeg")
+    transport = FakeTransport.new([[200, cloudflare_body, {}]])
+    cloudflare(transport, model: "clef-omni").ask(state: "x", questions: questions, audio: audio)
+
+    assert_equal [audio], JSON.parse(transport.calls.first[:body])["audio"]
+  end
+
+  def test_cloudflare_clef_refuses_the_whole_request_when_audio_comes_with_images
+    audio = RubyDecisionModel::Media.data_url("ID3", content_type: "audio/mpeg")
+    transport = FakeTransport.new([[200, cloudflare_body, {}]])
+
+    error = assert_raises(RubyDecisionModel::RequestError) do
+      cloudflare(transport).ask(state: "x", questions: questions, images: [png], audio: [audio])
+    end
+    assert_equal "cloudflare clef does not accept audio", error.message
+    assert_empty transport.calls
+  end
+
   def test_cloudflare_blank_api_token_falls_back_to_auth_token
     without_provider_env do
       with_env("CLOUDFLARE_API_TOKEN" => "  ", "CLOUDFLARE_AUTH_TOKEN" => "auth-token", "CLOUDFLARE_ACCOUNT_ID" => "acc") do

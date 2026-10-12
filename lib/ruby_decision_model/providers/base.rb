@@ -65,6 +65,18 @@ module RubyDecisionModel
         false
       end
 
+      # Whether requests may carry audio or videos. Client refuses audio: and
+      # videos: for a provider that says no, before anything goes over the
+      # wire. The model is passed because support can differ between one
+      # provider's models.
+      def supports_audio?(_model = nil)
+        false
+      end
+
+      def supports_videos?(_model = nil)
+        false
+      end
+
       # Response header carrying the provider's request id, or nil.
       # Typesafe's, which 0.1.0 read for every provider and System One
       # servers that follow Typesafe send too. Vendors with their own header
@@ -129,12 +141,14 @@ module RubyDecisionModel
         headers
       end
 
-      # Client passes images: only when the caller supplied some, so a
-      # subclass that does not take images can keep a three-keyword
-      # signature.
-      def request_body(model:, state:, questions:, images: nil)
+      # Client passes images:, audio:, and videos: only when the caller
+      # supplied some and the provider said it supports them, so a subclass
+      # that takes none can keep a three-keyword signature.
+      def request_body(model:, state:, questions:, images: nil, audio: nil, videos: nil)
         body = { "model" => model, "state" => state, "questions" => questions }
         body["images"] = images if images
+        body["audio"] = audio if audio
+        body["videos"] = videos if videos
         JSON.generate(body)
       end
 

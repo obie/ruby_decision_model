@@ -371,6 +371,109 @@ class ProvidersTest < Minitest::Test
     end
   end
 
+  def test_audio_and_videos_are_refused_by_providers_that_do_not_read_them
+    transport = FakeTransport.new([[200, success_body, {}]])
+    client = RubyDecisionModel::Client.new(provider: :typesafe, api_key: "k", transport: transport, sleeper: no_sleep)
+    audio = RubyDecisionModel::Media.data_url("x", content_type: "audio/mpeg")
+    video = RubyDecisionModel::Media.data_url("x", content_type: "video/mp4")
+
+    assert_raises(RubyDecisionModel::RequestError) { client.ask(state: {}, questions: questions, audio: [audio]) }
+    assert_raises(RubyDecisionModel::RequestError) { client.ask(state: {}, questions: questions, videos: [video]) }
+    assert_empty transport.calls
+  end
+
+  def test_calls_without_media_pass_exactly_the_three_keywords
+    klass = Class.new(legacy_provider_class) do
+      attr_reader :seen
+
+      def request_body(**keywords)
+        @seen = keywords.keys
+        JSON.generate(keywords)
+      end
+    end
+    provider = klass.new(api_key: "k")
+    transport = FakeTransport.new([[200, success_body, {}], [200, success_body, {}]])
+    client = RubyDecisionModel::Client.new(provider: provider, transport: transport, sleeper: no_sleep)
+
+    client.ask(state: {}, questions: questions)
+    assert_equal %i[model state questions], provider.seen
+    client.ask(state: {}, questions: questions, images: [], audio: nil, videos: [])
+    assert_equal %i[model state questions], provider.seen
+  end
+
+  def test_image_error_messages_are_unchanged
+    typesafe = RubyDecisionModel::Client.new(provider: :typesafe, api_key: "k", transport: FakeTransport.new([]),
+                                             sleeper: no_sleep)
+    image = RubyDecisionModel::Images.data_url("x", content_type: "image/png")
+    error = assert_raises(RubyDecisionModel::RequestError) { typesafe.ask(state: {}, questions: questions, images: [image]) }
+    assert_equal "typesafe does not accept images", error.message
+
+    openai = RubyDecisionModel::Client.new(provider: :openai, api_key: "k", transport: FakeTransport.new([]),
+                                           sleeper: no_sleep)
+    error = assert_raises(RubyDecisionModel::RequestError) { openai.ask(state: {}, questions: questions, images: [nil]) }
+    assert_equal "images must be data URLs (data:image/...); see RubyDecisionModel::Images", error.message
+  end
+
+  def test_provider_with_a_zero_argument_supports_images_and_images_only_request_body_still_works
+    klass = Class.new(legacy_provider_class) do
+      def supports_images? = true
+
+      def request_body(model:, state:, questions:, images: nil)
+        JSON.generate("model" => model, "images" => images)
+      end
+    end
+    transport = FakeTransport.new([[200, success_body, {}]])
+    client = RubyDecisionModel::Client.new(provider: klass.new(api_key: "k"), transport: transport, sleeper: no_sleep)
+    image = RubyDecisionModel::Images.data_url("x", content_type: "image/png")
+    audio = RubyDecisionModel::Media.data_url("x", content_type: "audio/mpeg")
+
+    client.ask(state: {}, questions: questions, images: [image])
+    assert_equal [image], JSON.parse(transport.calls.first[:body])["images"]
+
+    error = assert_raises(RubyDecisionModel::RequestError) do
+      client.ask(state: {}, questions: questions, images: [image], audio: [audio])
+    end
+    assert_includes error.message, "does not accept audio"
+    assert_equal 1, transport.calls.size
+  end
+
+  def test_media_data_url_and_from_file_reject_bad_input
+    assert_raises(ArgumentError) { RubyDecisionModel::Media.data_url("hi", content_type: nil) }
+
+    Dir.mktmpdir do |dir|
+      missing = File.join(dir, "missing.mp3")
+      assert_raises(Errno::ENOENT) { RubyDecisionModel::Media.from_file(missing) }
+
+      other = File.join(dir, "clip.ogg")
+      error = assert_raises(ArgumentError) { RubyDecisionModel::Media.from_file(other) }
+      assert_includes error.message, other
+    end
+  end
+
+  def test_media_data_url
+    assert_equal "data:audio/mpeg;base64,aGk=", RubyDecisionModel::Media.data_url("hi", content_type: "audio/mpeg")
+    assert_equal "data:video/mp4;base64,aGk=", RubyDecisionModel::Media.data_url("hi", content_type: "video/mp4")
+    assert_equal "data:image/png;base64,aGk=", RubyDecisionModel::Media.data_url("hi", content_type: "image/png")
+    assert_raises(ArgumentError) { RubyDecisionModel::Media.data_url("hi", content_type: "text/plain") }
+  end
+
+  def test_media_from_file_infers_the_type_from_the_extension
+    types = { "a.wav" => "audio/wav", "a.MP3" => "audio/mpeg", "v.mp4" => "video/mp4", "v.webm" => "video/webm",
+              "p.png" => "image/png" }
+    Dir.mktmpdir do |dir|
+      types.each do |name, type|
+        path = File.join(dir, name)
+        File.binwrite(path, "hi")
+        assert_equal "data:#{type};base64,aGk=", RubyDecisionModel::Media.from_file(path)
+      end
+
+      other = File.join(dir, "clip.ogg")
+      File.binwrite(other, "hi")
+      assert_raises(ArgumentError) { RubyDecisionModel::Media.from_file(other) }
+      assert_equal "data:audio/ogg;base64,aGk=", RubyDecisionModel::Media.from_file(other, content_type: "audio/ogg")
+    end
+  end
+
   # --- timeouts ---
 
   def test_timeout_defaults_come_from_the_provider

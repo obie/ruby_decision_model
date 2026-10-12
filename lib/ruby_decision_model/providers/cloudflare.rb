@@ -4,8 +4,9 @@ require_relative "base"
 
 module RubyDecisionModel
   module Providers
-    # Cloudflare's Clef and Clef-flash on Workers AI. The body is System One
-    # with Cloudflare's images extension; the model also appears in the
+    # Cloudflare's Clef, Clef-flash, and Clef-omni on Workers AI. The body is
+    # System One with Cloudflare's images, audio, and videos extensions
+    # (audio and videos on Clef-omni only); the model also appears in the
     # path, and the account id is required. Responses arrive inside the
     # Workers AI envelope ({"result": ..., "success": true}), which is
     # unwrapped here.
@@ -14,8 +15,13 @@ module RubyDecisionModel
         "cloudflare/clef" => "clef",
         "cloudflare/clef-flash" => "clef-flash",
         "@cf/cloudflare/clef" => "clef",
-        "@cf/cloudflare/clef-flash" => "clef-flash"
+        "@cf/cloudflare/clef-flash" => "clef-flash",
+        "cloudflare/clef-omni" => "clef-omni",
+        "@cf/cloudflare/clef-omni" => "clef-omni"
       }.freeze
+
+      # The models that read audio and videos as well as images.
+      OMNI_MODELS = %w[clef-omni].freeze
 
       # Cloudflare's own tooling reads CLOUDFLARE_API_TOKEN; the Clef docs
       # use CLOUDFLARE_AUTH_TOKEN. Either works, in that order.
@@ -74,6 +80,14 @@ module RubyDecisionModel
 
       def supports_images?
         true
+      end
+
+      def supports_audio?(model = nil)
+        OMNI_MODELS.include?(model.to_s)
+      end
+
+      def supports_videos?(model = nil)
+        OMNI_MODELS.include?(model.to_s)
       end
 
       def request_id_header
