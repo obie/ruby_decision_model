@@ -18,6 +18,8 @@ task default: :test
 #   rake smoke                                     every configured provider
 #   rake smoke TARGETS=open_router:clef,perplexity provider[:model] pairs
 #   rake smoke SMOKE_IMAGE=photo.png               also send an image where supported
+#   rake smoke TARGETS=cloudflare:clef-omni SMOKE_AUDIO=clip.mp3 SMOKE_VIDEO=clip.mp4
+#                                                  also send audio and video where supported
 desc "Live smoke test against each configured provider (needs real keys)"
 task :smoke do
   $LOAD_PATH.unshift File.expand_path("lib", __dir__)
@@ -47,6 +49,8 @@ task :smoke do
                                        criteria: ["No impact", "Minor", "Major", "Critical"])
   }
   image = ENV["SMOKE_IMAGE"].to_s.empty? ? nil : rdm::Images.from_file(ENV["SMOKE_IMAGE"])
+  audio = ENV["SMOKE_AUDIO"].to_s.empty? ? nil : rdm::Media.from_file(ENV["SMOKE_AUDIO"])
+  video = ENV["SMOKE_VIDEO"].to_s.empty? ? nil : rdm::Media.from_file(ENV["SMOKE_VIDEO"])
 
   failures = 0
   targets.each do |name, model|
@@ -54,11 +58,15 @@ task :smoke do
     begin
       client = rdm::Client.new(provider: name, model: model)
       images = image && client.provider.supports_images? ? [image] : nil
+      clips = audio && client.provider.supports_audio?(client.model) ? [audio] : nil
+      videos = video && client.provider.supports_videos?(client.model) ? [video] : nil
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      response = client.ask(state: state, questions: questions, images: images)
+      response = client.ask(state: state, questions: questions, images: images, audio: clips, videos: videos)
       elapsed = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round
 
-      puts "ok    #{label}  model=#{response.model.inspect}  #{elapsed}ms#{images ? '  +image' : ''}"
+      media = { "image" => [image, images], "audio" => [audio, clips], "video" => [video, videos] }
+      marks = media.filter_map { |kind, (given, sent)| "  #{sent ? '+' : 'skipped '}#{kind}" if given }.join
+      puts "ok    #{label}  model=#{response.model.inspect}  #{elapsed}ms#{marks}"
       puts format("      outage=%.3f urgent=%.3f team=%s (%.2f) severity=%.2f (%.2f)",
                   response["outage"].noul, response["urgent"].noul, response["team"].choice,
                   response["team"].confidence, response["severity"].score, response["severity"].confidence)

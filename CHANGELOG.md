@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.0 - 2026-10-12
+
+Cloudflare's `clef-omni` reads audio and video.
+
+- `Client#ask` takes `audio:` and `videos:`, arrays of base64 data URLs, for
+  `clef-omni`. Cloudflare reads WAV or MP3 audio and MP4 or WebM video. Added
+  `RubyDecisionModel::Media.data_url` and `.from_file`, which build data URLs
+  for images, audio, and video.
+- When the provider or model doesn't read audio or video, including `clef`
+  and `clef-flash`, the client raises `RequestError` before sending.
+- `cloudflare/clef-omni` and `@cf/cloudflare/clef-omni` resolve to
+  `clef-omni` on the Cloudflare provider. In 0.2.0 they raised
+  `ConfigurationError`. The bare `clef-omni` already worked.
+- New provider hooks `supports_audio?(model)` and `supports_videos?(model)`,
+  both false by default. `Base#request_body` accepts `audio:` and `videos:`.
+- `rake smoke` takes `SMOKE_AUDIO` and `SMOKE_VIDEO`.
+- Hosted `clef-flash` now has a 24,576-token context window. Cloudflare cuts
+  a text state that runs past the window to fit instead of rejecting it. The
+  gem is unchanged.
+
 ## 0.2.0 - 2026-10-06
 
 The decision models that shipped after Jev, behind the same `Client`.

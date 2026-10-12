@@ -60,12 +60,13 @@ module RubyDecisionModel
       @provider.base_url
     end
 
-    # images: data URLs (see Images) for providers that read images. Each
-    # provider places them where its API expects.
-    def ask(state:, questions:, images: nil)
+    # images:, audio:, videos: data URLs (see Images and Media) for providers
+    # and models that read them. Each provider places them where its API
+    # expects.
+    def ask(state:, questions:, images: nil, audio: nil, videos: nil)
       raise RequestError, "questions must not be empty" if questions.nil? || questions.empty?
 
-      body = build_body(state, questions, images)
+      body = build_body(state, questions, images: images, audio: audio, videos: videos)
       status, response_body, response_headers = perform_with_retry(
         url: request_url, headers: @provider.headers, body: body
       )
@@ -81,23 +82,42 @@ module RubyDecisionModel
       takes_model ? @provider.url(@model) : @provider.url
     end
 
-    def build_body(state, questions, images)
-      images = Array(images)
-      return @provider.request_body(model: @model, state: state, questions: questions) if images.empty?
+    MEDIA_PREFIXES = { images: "data:image/", audio: "data:audio/", videos: "data:video/" }.freeze
+    private_constant :MEDIA_PREFIXES
 
-      raise RequestError, "#{@provider.name} does not accept images" unless @provider.supports_images?
+    def build_body(state, questions, **media)
+      media = media.transform_values { |urls| Array(urls) }.reject { |_kind, urls| urls.empty? }
 
-      images.each do |image|
-        next if image.is_a?(String) && image.start_with?("data:image/")
+      media.each do |kind, urls|
+        raise RequestError, unsupported_message(kind) unless accepts?(kind)
 
-        raise RequestError, "images must be data URLs (data:image/...); see RubyDecisionModel::Images"
+        prefix = MEDIA_PREFIXES.fetch(kind)
+        next if urls.all? { |url| url.is_a?(String) && url.start_with?(prefix) }
+
+        raise RequestError, "#{kind} must be data URLs (#{prefix}...); see RubyDecisionModel::#{kind == :images ? 'Images' : 'Media'}"
       end
 
-      @provider.request_body(model: @model, state: state, questions: questions, images: images)
+      @provider.request_body(model: @model, state: state, questions: questions, **media)
     rescue JSON::GeneratorError, JSON::NestingError => e
       # The generator's message can quote the offending value, so it stays
       # on #cause rather than in a message that may be logged.
       raise RequestError, "state or questions could not be encoded as JSON (#{e.class})"
+    end
+
+    # supports_images? takes no argument in 0.2.0 providers, so it is called
+    # bare; audio and videos can differ per model, so those get the model.
+    def accepts?(kind)
+      case kind
+      when :images then @provider.supports_images?
+      when :audio then @provider.supports_audio?(@model)
+      when :videos then @provider.supports_videos?(@model)
+      end
+    end
+
+    def unsupported_message(kind)
+      return "#{@provider.name} does not accept images" if kind == :images
+
+      "#{[@provider.name, @model].compact.join(' ')} does not accept #{kind}"
     end
 
     def resolve_provider(provider, api_key:, base_url:)

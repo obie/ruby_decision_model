@@ -127,7 +127,9 @@ client = RubyDecisionModel::Client.new(provider: provider)
 
 Requests go to
 `https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/run/@cf/cloudflare/<model>`.
-The default model is `clef`; `clef-flash` is the smaller, faster one. The body
+The default model is `clef`; `clef-flash` is the smaller, faster one, and
+`clef-omni` also reads audio and video (see
+[Images, audio, and video](#images-audio-and-video)). The body
 is System One. The provider unwraps Cloudflare's `{"result": ...}` envelope,
 and a body with `"success": false` raises `InvalidResponse` carrying
 Cloudflare's error text. The account id and model end up in the URL path, so
@@ -137,6 +139,11 @@ with a letter or digit and may also hold `.`, `-`, and `_`. Anything else
 raises `ConfigurationError`.
 Usage reports tokens with no cost, and `response.request_id` is the `cf-ray`
 header.
+
+Hosted `clef-flash` has a 24,576-token context window; `clef` and `clef-omni`
+have about 64k. Cloudflare cuts a text state that runs past the window to
+fit and returns no error. Images, audio, and video that don't fit fail the
+request.
 
 ### Perplexity (pplx-decider)
 
@@ -206,7 +213,9 @@ Databricks, and System One servers default to 30, since Perplexity documents
 responses of up to 23 seconds on large inputs and a local server may load the
 model on the first request. Connecting gets 5 seconds either way. A number
 passed as `timeout:` sets both, as in 0.1.0. Through OpenRouter, pass a
-longer `timeout:` yourself for large inputs to slower models.
+longer `timeout:` yourself for large inputs to slower models. Audio and
+video take longer than text: Cloudflare reports about 1.5 seconds for a
+21-second video with sound. Pass a longer `timeout:` for long clips.
 
 ### Model aliases
 
@@ -225,26 +234,31 @@ whatever the provider returned.
 | `"luna"`, `"gpt-6-luna"` | `openai/gpt-6-luna-decisions` | `gpt-6-luna` (OpenAI) |
 | `"openai/gpt-6-luna-decisions"`, `"openai/gpt-6-luna"`, `"gpt-6-luna-decisions"` | as given | `gpt-6-luna` (OpenAI) |
 | `"clef"`, `"clef-flash"` | `cloudflare/clef`, `cloudflare/clef-flash` | as given (Cloudflare) |
-| `"cloudflare/clef"`, `"cloudflare/clef-flash"` | as given | `clef`, `clef-flash` (Cloudflare) |
-| `"@cf/cloudflare/clef"`, `"@cf/cloudflare/clef-flash"` | as given | `clef`, `clef-flash` (Cloudflare) |
+| `"cloudflare/clef"`, `"cloudflare/clef-flash"`, `"cloudflare/clef-omni"` | as given | `clef`, `clef-flash`, `clef-omni` (Cloudflare) |
+| `"@cf/cloudflare/clef"`, `"@cf/cloudflare/clef-flash"`, `"@cf/cloudflare/clef-omni"` | as given | `clef`, `clef-flash`, `clef-omni` (Cloudflare) |
 | `"pplx-decider"` | `perplexity/pplx-decider-v1-27b` | `pplx-decider-v1.1-27b` (Perplexity) |
 | `"pplx-decider-v1-27b"` | `perplexity/pplx-decider-v1-27b` | as given (Perplexity) |
 | `"perplexity/pplx-decider-v1-27b"` | as given | `pplx-decider-v1-27b` (Perplexity) |
 | anything else | as given | as given |
 
 OpenRouter carries pplx-decider v1 only, so `"pplx-decider"` means v1 there
-and v1.1 on Perplexity's own API.
+and v1.1 on Perplexity's own API. OpenRouter doesn't list `clef-omni` as of
+October 2026, so it has no alias there; on Cloudflare pass `"clef-omni"`.
 
 ### Writing a provider
 
 Subclass `RubyDecisionModel::Providers::Base` and define `name`, `env_var`,
 `default_base_url`, `endpoint_path`, and `default_model`. Optional hooks:
-`aliases`, `reports_cost?`, `supports_images?`, `request_id_header`,
+`aliases`, `reports_cost?`, `supports_images?`, `supports_audio?(model)`,
+`supports_videos?(model)`, `request_id_header`,
 `requires_api_key?`, `default_timeout`, `error_message`, and `validate!`. When the wire format differs from
 System One, override `request_body` to encode and `normalize_response` to turn
 the parsed body back into System One answers keyed by question id; the
 OpenAI provider shows both directions. Override `url(model)` when the model
-belongs in the path. Pass an instance as `provider:`.
+belongs in the path. A provider that answers true from `supports_audio?` or
+`supports_videos?` gets `audio:` or `videos:` passed to `request_body`, so
+an override of `request_body` has to accept them. Pass an instance as
+`provider:`.
 
 ## Questions and answers
 
@@ -268,7 +282,7 @@ approximately 1; treat them as calibrated, not normalized. Noul
 `probabilities` are always `{"true" => p, "false" => 1 - p}`. Most providers
 send only the probability, and the client fills in the split.
 
-## Images
+## Images, audio, and video
 
 OpenAI, Cloudflare, Perplexity, and System One servers read images. Pass them
 as base64 data URLs; no provider fetches a remote URL.
@@ -289,6 +303,39 @@ OpenAI, the `images` field for Cloudflare and System One servers, and
 `image_url` parts inside `state` for Perplexity. Typesafe, OpenRouter, and
 Databricks don't take images, so the client raises `RequestError` before
 sending. Size and count limits vary by vendor and are enforced server side.
+
+Cloudflare's `clef-omni` also reads audio (WAV or MP3) and video (MP4 or
+WebM), passed as `audio:` and `videos:`. `RubyDecisionModel::Media.from_file`
+and `.data_url` build data URLs for all three kinds, and `Images` still works
+for images.
+
+```ruby
+client = RubyDecisionModel::Client.new(provider: :cloudflare, model: "clef-omni")
+
+client.ask(
+  state: "Customer sent a photo, a voice note, and a short video of the fault.",
+  questions: { "faulty" => RubyDecisionModel::Questions.noul("Is the device faulty?") },
+  images: [RubyDecisionModel::Media.from_file("device.jpg")],
+  audio: [RubyDecisionModel::Media.from_file("note.mp3")],
+  videos: [RubyDecisionModel::Media.from_file("fault.mp4")]
+)
+```
+
+On Cloudflare they go in the `images`, `audio`, and `videos` fields. A
+provider or model that doesn't read audio or video, including `clef` and
+`clef-flash`, makes the client raise `RequestError` before sending.
+Cloudflare documents up to 4 images, 4 audio clips, and 2 videos per request,
+enforced server side.
+
+The client checks only that each item is a data URL of the right kind
+(`data:image/`, `data:audio/`, or `data:video/`). It does not decode the
+payload or measure it, and `from_file` reads the whole file into memory.
+Format, size, and count are the provider's to enforce, so check uploads you
+don't control before you pass them on.
+
+A retry sends the whole body again, so with the default policy a request
+carrying large clips can upload up to three times. Build the client with
+`retry: { max_retries: 0 }` to turn retries off for those calls.
 
 ## Retries
 
@@ -338,7 +385,7 @@ return is still accepted and treated as having no headers, which means no
 | Error | Meaning |
 | --- | --- |
 | `ConfigurationError` | No provider could be resolved, a missing key or setting (api_key, account_id, base_url), unknown provider, a `model:` Databricks can't take, or bad `retry:` value |
-| `RequestError` | Questions hash was empty, images were not data URLs or went to a provider that doesn't read them, or state or questions could not be encoded as JSON (original error on `#cause`) |
+| `RequestError` | Questions hash was empty, images, audio, or videos were not data URLs or went to a provider or model that doesn't read them, or state or questions could not be encoded as JSON (original error on `#cause`) |
 | `TransportError` (`TimeoutError`) | Network or timeout failure after retries, carries `#cause_error` |
 | `ApiError` | Non-2xx response, carries `#status`, `#body`, and `#headers`. The message ends with the vendor's own reason when the body has one |
 | `Unauthorized` | 401 |
@@ -349,7 +396,7 @@ return is still accepted and treated as having no headers, which means no
 | `InvalidResponse` | Body wasn't JSON, wasn't a Hash, or an answer was malformed (including a noul outside 0..1 or an id answered twice) |
 | `MissingAnswers` | One or more question ids came back missing, wrong-typed, or refused. Carries `#missing`, `#refused` (the subset the provider declined), and `#answers` |
 
-Status: 0.2.0, API may change.
+Status: 0.3.0, API may change.
 
 The companion gem `decide` builds decisions and verdicts on top of this client.
 
@@ -364,6 +411,8 @@ anywhere. To ship a version:
    request per configured provider and prints the answers. CI never runs it.
    `TARGETS=open_router:clef,open_router:luna` picks provider and model
    pairs, and `SMOKE_IMAGE=photo.png` adds an image where supported.
+   `SMOKE_AUDIO=clip.mp3` and `SMOKE_VIDEO=clip.mp4` add audio and video
+   where the model reads them, such as `TARGETS=cloudflare:clef-omni`.
 4. Merge to `main`. The Release workflow runs the suite, builds the gem with
    `gem build --strict`, checks the built gem carries every file under
    `lib/`, and pushes it. A version already on RubyGems is skipped, so the
