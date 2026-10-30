@@ -363,6 +363,7 @@ class VendorProvidersTest < Minitest::Test
     call = transport.calls.first
     assert_equal "https://api.perplexity.ai/v1/decisions", call[:url]
     assert_equal "Bearer pplx-key", call[:headers]["Authorization"]
+    assert_equal "ruby-decision-model", call[:headers]["X-Pplx-Integration"]
     body = JSON.parse(call[:body])
     assert_equal %w[model state questions], body.keys
     assert_equal({ "title" => "Battery died" }, body["state"])
@@ -374,6 +375,16 @@ class VendorProvidersTest < Minitest::Test
     assert_equal 367, response.usage.input_tokens
     assert_equal "pplx-req", response.request_id
     assert_nil response.id
+  end
+
+  def test_perplexity_sends_integration_header_only_to_its_own_host
+    provider = RubyDecisionModel::Providers::Perplexity.new(api_key: "k")
+    assert_equal "ruby-decision-model", provider.headers["X-Pplx-Integration"]
+
+    ["https://proxy.example.com", "https://api.perplexity.ai.example.com"].each do |base_url|
+      provider = RubyDecisionModel::Providers::Perplexity.new(api_key: "k", base_url: base_url)
+      refute provider.headers.key?("X-Pplx-Integration"), base_url
+    end
   end
 
   def test_perplexity_moves_images_into_a_state_array
