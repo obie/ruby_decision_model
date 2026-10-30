@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "uri"
 require_relative "base"
 
 module RubyDecisionModel
@@ -51,6 +52,14 @@ module RubyDecisionModel
         "x-request-id"
       end
 
+      # Identifies this library to Perplexity. Sent only to Perplexity's own
+      # host, never to a proxy or other server set through base_url:.
+      def headers
+        headers = super
+        headers["X-Pplx-Integration"] = "ruby-decision-model" if perplexity_host?
+        headers
+      end
+
       def request_body(model:, state:, questions:, images: nil)
         return super(model: model, state: state, questions: questions) if images.nil? || images.empty?
 
@@ -59,6 +68,12 @@ module RubyDecisionModel
       end
 
       private
+
+      def perplexity_host?
+        URI.parse(base_url).host.to_s.casecmp?("api.perplexity.ai")
+      rescue URI::InvalidURIError
+        false
+      end
 
       def state_parts(state)
         case state
