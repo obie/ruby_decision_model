@@ -512,6 +512,43 @@ class VendorProvidersTest < Minitest::Test
     assert_empty transport.calls
   end
 
+  # --- Turion ---
+
+  def turion_body
+    JSON.generate("model" => "turion-jev-31b", "answers" => system_one_answers,
+                  "usage" => { "input_tokens" => 212, "output_tokens" => 0 })
+  end
+
+  def test_turion_defaults_and_aliases
+    provider = RubyDecisionModel::Providers::Turion.new(api_key: "k")
+    assert_equal "https://api.turion.ai/v1/systemone", provider.url
+    assert_equal "turion-jev-31b", provider.resolve_model(nil)
+    assert_equal "turion-jev-31b", provider.resolve_model("turion/turion-jev-31b")
+    assert_equal "turion-jev-31b", provider.resolve_model("turion-ai/turion-jev-31b")
+    assert_equal "TURION_API_KEY", provider.env_var
+  end
+
+  def test_turion_speaks_system_one
+    transport = FakeTransport.new([[200, turion_body, { "x-request-id" => "turion-req" }]])
+    client = RubyDecisionModel::Client.new(provider: :turion, api_key: "tk_key", transport: transport,
+                                           sleeper: no_sleep)
+    response = client.ask(state: "Charged twice for October.", questions: questions)
+
+    call = transport.calls.first
+    assert_equal "https://api.turion.ai/v1/systemone", call[:url]
+    assert_equal "Bearer tk_key", call[:headers]["Authorization"]
+    body = JSON.parse(call[:body])
+    assert_equal %w[model state questions], body.keys
+    assert_equal "turion-jev-31b", body["model"]
+
+    assert_in_delta 0.9, response["urgent"].noul, 0.0001
+    assert_equal "billing", response["team"].choice
+    assert_equal 212, response.usage.input_tokens
+    assert_equal 0, response.usage.output_tokens
+    assert_nil response.usage.cost
+    assert_equal "turion-req", response.request_id
+  end
+
   # --- generic System One servers ---
 
   # Shape of strands-decider's local server, including its extra latency_ms.
