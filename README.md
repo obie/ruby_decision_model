@@ -4,7 +4,8 @@ The decision-model interface for Ruby. Decision models answer typed questions
 about a state with calibrated probabilities instead of generating text. This gem
 talks to them through one `Client` with a provider behind it. OpenRouter is the
 default. Typesafe (Jev), OpenAI (gpt-6-luna), Cloudflare (Clef), Perplexity
-(pplx-decider), and Databricks (`ai_decide`) each have a native provider, and
+(pplx-decider), Databricks (`ai_decide`), and Turion (Turion Jev) each have a
+native provider, and
 any server that speaks the System One API (Ollama, strands-decider, the
 autojev server) works through `:system_one`. Your questions and answers keep
 one shape whichever provider serves them. No runtime dependencies beyond the
@@ -169,6 +170,18 @@ still change. The workspace serves one managed model, so
 `client.model` is nil and passing `model:` raises `ConfigurationError`. The
 provider reads answers from the `response` wrapper. Databricks reports no
 usage, so every usage field is nil.
+
+### Turion (Turion Jev)
+
+```ruby
+# ENV["TURION_API_KEY"]
+client = RubyDecisionModel::Client.new(provider: :turion)
+```
+
+Requests go to `https://api.turion.ai/v1/systemone`. The default model is
+`turion-jev-31b`, an open-weights model. The body is System One. Usage reports
+`input_tokens` and `output_tokens`; `cost` is `nil`. `response.request_id`
+reads `x-request-id`.
 
 ### System One servers (Ollama, local models)
 

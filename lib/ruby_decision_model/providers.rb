@@ -7,6 +7,7 @@ require_relative "providers/openai"
 require_relative "providers/cloudflare"
 require_relative "providers/perplexity"
 require_relative "providers/databricks"
+require_relative "providers/turion"
 require_relative "providers/system_one"
 
 module RubyDecisionModel
@@ -18,6 +19,7 @@ module RubyDecisionModel
       cloudflare: Cloudflare,
       perplexity: Perplexity,
       databricks: Databricks,
+      turion: Turion,
       system_one: SystemOne
     }.freeze
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- New provider `:turion` for Turion's hosted Turion Jev 31B
+  (`https://api.turion.ai/v1/systemone`, `TURION_API_KEY`). The body is
+  System One, and `response.request_id` reads `x-request-id`.
+
 ## 0.3.0 - 2026-10-12
 
 Cloudflare's `clef-omni` reads audio and video.
